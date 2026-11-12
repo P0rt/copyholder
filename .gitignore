@@ -1,0 +1,27 @@
+node_modules/
+live/node_modules/
+dist/
+coverage/
+test-results/
+playwright-report/
+.vite/
+
+# Secrets and per-machine settings: never in git
+.env
+settings.env
+
+# Recordings stay on the Mac
+sessions/
+**/sdk_raw.jsonl.gz
+**/samples.jsonl
+*.mp4
+*.mov
+*.webm
+*.mkv
+
+# Python
+tools/tts/.venv/
+__pycache__/
+*.pyc
+
+.DS_Store

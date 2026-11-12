@@ -1,0 +1,31 @@
+{
+  "name": "copyholder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A narrator reads your own draft back to you with planted errors and must go quiet on your in-breath, before your voice.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "test": "npm run typecheck && npm run test:unit && npm run test:e2e",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test --pass-with-no-tests",
+    "setup:live": "npm ci --prefix live"
+  },
+  "dependencies": {
+    "ws": "^8.22.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2",
+    "fast-check": "^4.10.2",
+    "tsx": "^4.23.15",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
