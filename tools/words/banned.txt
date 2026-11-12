@@ -1,0 +1,65 @@
+# Banned words and phrases (spec 13.6). Substring match, case-insensitive.
+# One entry per line; lines starting with # are comments.
+
+# False claims about data flows
+nothing leaves
+fully local
+on-device only
+no data is sent
+anonymous
+
+# Medical words
+diagnos
+treatment
+medical
+clinical
+FDA-cleared
+health monitor
+apnea
+stress
+anxiety
+breath-hold
+
+# Judgements about a person from a signal
+lie detector
+truth
+honesty
+credibility
+deception
+emotion
+mood
+intent
+reads your mind
+attention
+engagement
+
+# Covert observation
+monitoring
+surveillance
+covert
+in the background
+
+# Security and identity
+liveness
+authentication
+proves a human
+
+# General claims about the SDK
+benchmark
+reverse engineer
+decompil
+
+# Promises about the signal
+predicts
+about to speak
+accurate
+proof of life
+
+# Status with Presage, generalisations, team
+official
+endorsed by
+partner of Presage
+any webcam
+works for everyone
+we built
+our team

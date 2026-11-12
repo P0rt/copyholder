@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test:unit": "vitest run",
     "test:e2e": "playwright test --pass-with-no-tests",
-    "setup:live": "npm ci --prefix live"
+    "setup:live": "npm ci --prefix live",
+    "lint:words": "tsx tools/lint-words.ts"
   },
   "dependencies": {
     "ws": "^8.22.2"

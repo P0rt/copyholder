@@ -1,0 +1,16 @@
+# Exact phrases allowed although they contain a banned word (spec 13.6).
+# Case-sensitive exact match; the phrase is removed before the banned-word scan.
+
+# Presage disclaimer (spec 12.2, verbatim from the SDK documentation)
+SDK metrics are offered for general wellness and informational purposes only. SDK metrics have not been cleared by the FDA and may not be used for medical diagnosis or treatment.
+not be used for medical diagnosis or treatment
+This app makes no diagnosis and no health claim.
+
+# Consent screen (spec 12.2)
+That does not switch off authentication, model delivery or the transfer above.
+
+# SDK error code
+kAuthenticationFailed
+
+# Method term
+ground truth
