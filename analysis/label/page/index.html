@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blind labels</title>
+<link rel="stylesheet" href="/label.css">
+<script type="module" src="/label.js"></script>
+</head>
+<body>
+<main id="app">
+  <header>
+    <h1>Blind labels</h1>
+    <p id="counter" aria-live="polite">Loading</p>
+  </header>
+
+  <section id="work" hidden>
+    <p class="help">Mark where the first sound of the reply begins in the microphone channel. The window runs from 1 s before the dot
+      to 11 s after it: a reply may begin up to 10 s after the dot. Click the whole window, refine in the 1 s view below it and
+      in the 20 ms view, then move the mark with <kbd>&larr;</kbd> <kbd>&rarr;</kbd> by one sample, <kbd>Shift</kbd> + arrow by 1 ms,
+      <kbd>Alt</kbd> + arrow by 10 ms. <kbd>Space</kbd> plays the window, <kbd>P</kbd> plays from the mark, <kbd>D</kbd> plays the 1 s view.
+      Pick the kind of sound, or <em>No reply</em>, then <kbd>Enter</kbd> saves and goes on.</p>
+
+    <div class="plot">
+      <canvas id="overview" width="1200" height="300" aria-label="Waveform and spectrogram of the microphone channel, 1 s before to 11 s after the dot"></canvas>
+      <div id="axis" class="axis" aria-hidden="true"></div>
+    </div>
+    <div class="detailrow">
+      <canvas id="detail" width="1200" height="240" aria-label="Waveform and spectrogram of the microphone channel, 1 s around the mark"></canvas>
+    </div>
+    <div class="zoomrow">
+      <canvas id="zoom" width="1200" height="120" aria-label="Waveform around the mark, sample by sample"></canvas>
+    </div>
+    <p id="readout" class="readout">No mark yet</p>
+
+    <div class="row" role="radiogroup" aria-label="Kind of sound">
+      <button type="button" class="kind" data-label="speech" id="kind-speech"><kbd>S</kbd> Speech</button>
+      <button type="button" class="kind" data-label="cough" id="kind-cough"><kbd>C</kbd> Cough</button>
+      <button type="button" class="kind" data-label="laugh" id="kind-laugh"><kbd>L</kbd> Laugh</button>
+      <button type="button" class="kind" data-label="throat" id="kind-throat"><kbd>T</kbd> Throat clearing</button>
+      <button type="button" class="kind" data-label="other" id="kind-other"><kbd>O</kbd> Other sound</button>
+      <button type="button" class="kind" data-label="none" id="kind-none"><kbd>N</kbd> No reply</button>
+    </div>
+
+    <div class="row">
+      <button type="button" id="play"><kbd>Space</kbd> Play</button>
+      <button type="button" id="play-mark"><kbd>P</kbd> Play from mark</button>
+      <button type="button" id="play-detail"><kbd>D</kbd> Play 1 s view</button>
+      <button type="button" id="back">Back</button>
+      <button type="button" id="save" class="primary"><kbd>Enter</kbd> Save and next</button>
+    </div>
+    <p id="status" class="status" aria-live="polite"></p>
+  </section>
+
+  <section id="done" hidden>
+    <h2>All marks are saved</h2>
+    <p id="done-message"></p>
+    <p>You can close this window.</p>
+  </section>
+</main>
+</body>
+</html>

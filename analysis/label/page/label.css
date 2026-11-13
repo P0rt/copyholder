@@ -1,0 +1,43 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f6f4;
+  --fg: #1c1c1c;
+  --muted: #5d5d5d;
+  --panel: #ffffff;
+  --line: #c9c9c4;
+  --accent: #b3261e;
+  --chosen: #1f4e8c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161616;
+    --fg: #ececec;
+    --muted: #a5a5a5;
+    --panel: #202020;
+    --line: #3d3d3d;
+    --accent: #ff6b5e;
+    --chosen: #7fb0ff;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 16px; }
+header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0 0 8px; }
+h2 { font-size: 18px; }
+.help { color: var(--muted); margin: 0 0 12px; }
+kbd { font: 12px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; background: var(--panel); }
+.plot, .detailrow, .zoomrow { position: relative; }
+canvas { display: block; width: 100%; height: auto; background: var(--panel); border: 1px solid var(--line); cursor: crosshair; }
+#detail, #zoom { margin-top: 8px; }
+.axis { position: relative; height: 18px; font: 11px ui-monospace, Menlo, monospace; color: var(--muted); }
+.axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.readout { font: 13px ui-monospace, Menlo, monospace; margin: 6px 0 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+button { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.kind[aria-checked="true"] { border-color: var(--chosen); outline: 2px solid var(--chosen); }
+button.primary { border-color: var(--chosen); }
+button:disabled { opacity: 0.5; cursor: default; }
+.status { min-height: 1.4em; color: var(--muted); }
+.status.error { color: var(--accent); }
