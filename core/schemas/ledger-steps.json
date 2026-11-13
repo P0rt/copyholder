@@ -1,0 +1,56 @@
+{
+  "schema": "ledger-steps/1",
+  "spec": "8.5",
+  "line": {
+    "keys": ["i", "step", "utc", "commit", "out_sha256", "exploratory", "prev"],
+    "note_keys": ["i", "step", "utc", "commit", "what", "detail", "prev"],
+    "example": "{\"i\":4,\"step\":\"label\",\"utc\":\"2026-11-14T09:12:40Z\",\"commit\":\"1a2b3c4\",\"out_sha256\":{\"clock_report.json\":\"<64 hex>\",\"onsets.json\":\"<64 hex>\"},\"exploratory\":false,\"prev\":\"<64 hex>\"}",
+    "i": "0-based line index",
+    "utc": "UTC time like 2026-11-14T09:12:40Z",
+    "commit": "git commit, 7 to 40 lowercase hex; null only outside a git checkout",
+    "out_sha256": "files the step wrote: relative name -> SHA-256 (64 lowercase hex), names sorted",
+    "prev": "SHA-256 (64 lowercase hex) of the previous line's UTF-8 text without its newline",
+    "first_prev": "0000000000000000000000000000000000000000000000000000000000000000",
+    "format": "JSON.stringify of the keys in this order, one line, ending with a newline"
+  },
+  "steps": ["record", "quickcheck", "clocks", "onsets", "label", "stage_a", "stage_b", "verdict", "score", "review", "reveal", "receipt", "pack"],
+  "orders": {
+    "gate": ["record", "quickcheck", "clocks", "onsets", "label", "stage_a", "stage_b", "verdict", "pack"],
+    "numbers": ["record", "quickcheck", "clocks", "onsets", "label", "score", "review", "reveal", "receipt", "pack"],
+    "spacebar": ["record", "quickcheck", "clocks", "onsets", "label", "score", "review", "reveal", "receipt", "pack"],
+    "rehearsal": ["record", "quickcheck", "clocks", "onsets", "label", "score", "review", "reveal", "receipt"],
+    "demo": ["record", "quickcheck", "clocks", "onsets", "score", "reveal", "receipt", "pack"],
+    "pilot": ["record", "quickcheck", "onsets", "reveal"]
+  },
+  "kinds": "manifest.json kind; doctor, smoke, headstart, live_from and live_sim records have no step order",
+  "repeat": "a confirmatory step may be written again right after itself (a re-run), except the steps in once",
+  "once": ["record", "stage_a", "stage_b", "verdict"],
+  "exploratory": {
+    "kinds": ["gate"],
+    "steps": ["stage_a", "stage_b", "verdict"],
+    "after": "stage_b",
+    "rule": "exploratory lines stand only after the confirmatory stage_b and do not advance the order; after it every stage_a and stage_b line, and every verdict line once the confirmatory verdict is written, has exploratory true; the confirmatory verdict follows the confirmatory stage_b with only notes and exploratory lines between (normally none: both come from one run) and lists the same verdict.json hash as stage_b"
+  },
+  "outputs": "every step line lists at least one file in out_sha256; a confirmatory line also lists every file that required_outputs names for its step",
+  "required_outputs": {
+    "onsets": ["onsets.json"],
+    "label": ["clock_report.json", "onsets.json"],
+    "stage_a": ["params/frozen.json"],
+    "stage_b": ["verdict.json"],
+    "verdict": ["verdict.json", "verdict.md"],
+    "score": ["score.json.enc"],
+    "review": ["review.json"],
+    "receipt": ["receipt.json", "receipt.txt"]
+  },
+  "batch": {
+    "kinds": ["numbers", "spacebar"],
+    "after_last_record": ["onsets", "label", "score", "review", "reveal", "receipt"],
+    "before_first_reveal": ["label", "score", "review"],
+    "rule": "across the ledgers of all numbers sessions and the space-bar block: no confirmatory step of after_last_record has a utc before the latest record line of any of them, and every ledger holds each step of before_first_reveal at or before the first reveal line of any of them; once a step of after_last_record is written, the batch holds a numbers session and the space-bar block, each with a record line (the block may be missing only when it was cut, spec 14.4)"
+  },
+  "note": {
+    "step": "note",
+    "whats": ["plan_seen", "narrowed_claim"],
+    "rule": "note lines may stand anywhere and do not advance the order; what is a snake_case word, detail an optional string"
+  }
+}
