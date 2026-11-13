@@ -563,10 +563,15 @@ test('gate pack A: Deck runs the minute table of spec 9.3, counted in samples', 
 });
 
 test('window and device events reach the worker; hidden page, devicechange, ended and mute are hard', async ({ page }) => {
+  // The page asks for full screen at consent and at Start (spec 7.3), and Chromium refuses to resize a
+  // full-screen window (Browser.setWindowBounds). This test resizes the window, so full screen is refused here.
+  await page.addInitScript(() => {
+    Element.prototype.requestFullscreen = () => Promise.reject(new TypeError('no full screen in this test'));
+  });
   await openPage(page, standIn.origin, GATE_A);
   await agreeAndStart(page);
   const events = async () => pageMessages((await trace(page)).toWorker).filter((m) => m.k === 'event');
-  await page.waitForTimeout(300); // let a full-screen resize, if any, land before the baseline
+  await page.waitForTimeout(300); // let any late window event land before the baseline
   const before = (await events()).length;
   await page.evaluate(() => {
     const set = (v: string) => Object.defineProperty(document, 'visibilityState', { value: v, configurable: true });
