@@ -1,0 +1,30 @@
+{
+  "schema": "gate-pack/1",
+  "pack": "B",
+  "note": "Built by gate/check-texts.ts --build after the render. Host serves only the files listed here, with these SHA-256.",
+  "files": {
+    "cues.json": {
+      "sha256": "cce1b5deb5eda8393d4e44ef72d957ae34e72f08b9ecf07d19f9916e6fb36b9c"
+    },
+    "listen.timings.json": {
+      "sha256": "928216bad8b6c2f3d68b35e8554764756824a866e5f5a579c4ecb3c311cc922a"
+    },
+    "listen.wav": {
+      "sha256": "654d335d6b33c130af5d5d6e31621fce202391b4741393c83628edddfa8a74d1"
+    },
+    "objections.timings.json": {
+      "sha256": "730714b1e422995930286804c18e1740af77bde9e5e539a4f3f3e13c3cc8416e"
+    },
+    "objections.wav": {
+      "sha256": "2fd3353acd1badfe0bb05e242fefb79fea437f8f5a17caf9a29307389d3551cc"
+    }
+  },
+  "spoken": {
+    "listen": {
+      "sha256": "375a119b78a0df4240583ebb48f3e04c5aca6393968be17fc7ccbc0d73d2a230"
+    },
+    "objections": {
+      "sha256": "e39e96a3e09839e6129e7417ab3c63f993203eb518dfdbca8a4b087bfdea03db"
+    }
+  }
+}
