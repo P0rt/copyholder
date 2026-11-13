@@ -1,0 +1,39 @@
+[project]
+name = "copyholder-tts"
+version = "0.1.0"
+description = "Copyholder narrator: Kokoro-82M, voice af_heart, mono 48 kHz WAV plus word timings (spec 7.7)"
+readme = "README.md"
+license = "MIT"
+# kokoro 0.9.x supports Python 3.10 to 3.12; .python-version pins 3.12 (spec 7.7, 13.2).
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "kokoro==0.9.4",
+  # English G2P used by kokoro; pinned because word alignment depends on its tokens.
+  "misaki[en]==0.9.4",
+  # spaCy model for misaki, as a direct wheel so nothing is downloaded at run time.
+  "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+  "spacy>=3.8,<3.9",
+  "torch>=2.6",
+  "huggingface-hub>=0.30",
+  "loguru>=0.7",
+  "numpy>=1.26",
+  "soundfile>=0.13.1",
+  "soxr==1.1.0",
+]
+
+[tool.uv]
+package = false
+# uv.lock stays universal; locking fails if a pin lacks wheels for the Mac or the cloud Linux box.
+required-environments = [
+  "sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
+
+# Linux takes the CPU-only PyTorch wheels (no CUDA packages); macOS takes the PyPI wheels.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

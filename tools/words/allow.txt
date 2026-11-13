@@ -14,3 +14,9 @@ kAuthenticationFailed
 
 # Method term
 ground truth
+
+# TERMS.md bans in the legal terms of the Presage Terms of Service (spec 12.6, 3.2)
+You may not reverse engineer, decompile or disassemble the SmartSpectra SDK, or try to extract its models or algorithms.
+You may not use the app or its output for medical diagnosis or treatment, or present them as a means of diagnosis or treatment.
+You may not use the app or its output to make decisions about a person's job, insurance, credit, housing, education or benefits, or about a person's truthfulness or trustworthiness.
+You may not use the app or its output to infer the emotions of people at work or in education.
