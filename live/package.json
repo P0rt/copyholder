@@ -1,0 +1,18 @@
+{
+  "name": "copyholder-live",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Live side of Copyholder: tap.cjs (the only file that loads the SmartSpectra SDK) and the Electron fallback launcher.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "dependencies": {
+    "@smartspectra/node-sdk": "3.5.0",
+    "ws": "^8.22.2"
+  },
+  "optionalDependencies": {
+    "electron": "43.8.1"
+  }
+}

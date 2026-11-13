@@ -1,0 +1,7 @@
+{
+  "name": "copyholder-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fallback launcher: runs a live command under Electron 43.8.1 (spec 6.7). Started by `npm run live:electron -- <command>`.",
+  "main": "main.cjs"
+}
