@@ -35,6 +35,7 @@
     "clocks": "tsx analysis/clocks.ts",
     "label": "tsx analysis/label.ts",
     "analyze:gate": "tsx analysis/gate.ts",
+    "retune": "tsx analysis/retune.ts",
     "session": "npm run -s build:web && node live/host.cjs --mode session",
     "rehearsal": "npm run -s build:web && node live/host.cjs --mode rehearsal",
     "demo": "npm run -s build:web && node live/host.cjs --mode demo",
