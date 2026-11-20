@@ -40,6 +40,7 @@
     "purge": "tsx analysis/purge.ts",
     "confirm": "tsx analysis/confirm.ts",
     "take": "tsx analysis/take.ts",
+    "replay": "tsx analysis/replay.ts",
     "article": "tsx tools/article.ts",
     "video": "tsx tools/video/run.ts",
     "session": "npm run -s build:web && node live/host.cjs --mode session",
