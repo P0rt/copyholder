@@ -376,7 +376,7 @@ Written before any gate recording and frozen with the rest of this file by `gate
 
 1. With `PASS`, the stage A parameters stay.
 2. Otherwise the ladder of §7.7 runs, rungs 1 to 3 with D3, whichever rows are `BETWEEN` or `KILL`; the first rung that gives `PASS` on all five rows of pack A sets the parameters.
-3. If no rung does, among all parameter sets the ladder tried, those with at most 2 false holds per active minute (row 3) remain, and the one with the highest row 1 count wins; ties go to the lower row 3 rate, then `L` nearer 5, then `M` nearer 2, then D1 before D3. If none has row 3 at most 2, the set with the lowest row 3 rate wins.
+3. If no rung does, among the stage A set and all sets the ladder tried, those with at most 2 false holds per active minute (row 3) remain, and the one with the highest row 1 count wins; ties go to the lower row 3 rate, then `L` nearer 5, then `M` nearer 2, then D1 before D3. If none has row 3 at most 2, the set with the lowest row 3 rate wins.
 
 Each candidate gets its own `theta_G` by §6.4. The chosen parameters go into `params/frozen.json` and its copy `params/retune.json`; `npm run freeze -- gate-retune` freezes them together with the pooled analysis code below, and the tag is pushed before pack B is recorded.
 
