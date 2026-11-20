@@ -25,6 +25,7 @@
     "gate:texts": "tsx gate/check-texts.ts",
     "gate:build": "tsx gate/check-texts.ts --build",
     "gate:render": "tsx gate/render-packs.ts",
+    "sample:build": "tsx tools/sample/build.ts",
     "freeze": "tsx tools/freeze.ts",
     "doctor": "npm run -s build:web && node live/host.cjs --mode doctor",
     "smoke": "npm run -s build:web && node live/host.cjs --mode smoke",

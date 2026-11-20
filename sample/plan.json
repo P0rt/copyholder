@@ -1,0 +1,117 @@
+{
+  "schema": "sample-plan/1",
+  "licence": "CC0-1.0",
+  "note": "Public plan of the sample text (spec 7.11, PREREG.md section 11): not sealed, so the sample is not blind. Word numbers and sentence numbers count from 0 as timings.json does; word_end is inclusive; times are ms from the first sample of the clip.",
+  "passages": [
+    {
+      "passage_id": "opening",
+      "text_file": "texts/opening.txt",
+      "text_sha256": "5709e7def34d3c7e7147cc3af2a40868197843dde11f36764c26bbadf167fd8e",
+      "audio_file": "opening.wav",
+      "audio_sha256": "8f1d4318499a64dad0300203802ae7dc691d4f5f5af40f3f573785841b7d5a10",
+      "duration_ms": 60275,
+      "word_count": 199,
+      "sentence_count": 8,
+      "error_count": 0
+    },
+    {
+      "passage_id": "p1",
+      "text_file": "texts/p1.txt",
+      "text_sha256": "c9864ad5b4f52ac9ea69ea0f9c15ca77c44420176e914e3cf49b280fa1095b5d",
+      "audio_file": "p1.wav",
+      "audio_sha256": "a3e5c3e7c238e6f1935df3e0f95da20271ecef1029df1b350712cb85c28a7a32",
+      "duration_ms": 56350,
+      "word_count": 182,
+      "sentence_count": 10,
+      "error_count": 3
+    },
+    {
+      "passage_id": "p2",
+      "text_file": "texts/p2.txt",
+      "text_sha256": "532ab4fc900012b599550b24289d5ccadb45fedd8cd43ee796ed4bc9cb7a4e0a",
+      "audio_file": "p2.wav",
+      "audio_sha256": "fc573161fd3c64d0a3c4bda3fdacf92300c1d877e9de68be43affe022d5e5675",
+      "duration_ms": 44025,
+      "word_count": 142,
+      "sentence_count": 9,
+      "error_count": 2
+    }
+  ],
+  "errors": [
+    {
+      "error_id": "sample-e1",
+      "passage_id": "p1",
+      "class": "number",
+      "sentence_index": 2,
+      "replacement": "seven",
+      "original_span": "four",
+      "planted_sentence": "It is a narrow rectangle, and like any rectangle it has seven corners.",
+      "original_sentence": "It is a narrow rectangle, and like any rectangle it has four corners.",
+      "word_start": 43,
+      "word_end": 43,
+      "span_start_ms": 13013,
+      "span_end_ms": 13375,
+      "sentence_end_ms": 13925
+    },
+    {
+      "error_id": "sample-e2",
+      "passage_id": "p1",
+      "class": "swapped_fact",
+      "sentence_index": 4,
+      "replacement": "on trees",
+      "original_span": "under the ground",
+      "planted_sentence": "The carrots needed more room, so they went into a deep wooden box by the door, because carrots grow on trees.",
+      "original_sentence": "The carrots needed more room, so they went into a deep wooden box by the door, because carrots grow under the ground.",
+      "word_start": 89,
+      "word_end": 90,
+      "span_start_ms": 27575,
+      "span_end_ms": 28263,
+      "sentence_end_ms": 28263
+    },
+    {
+      "error_id": "sample-e3",
+      "passage_id": "p1",
+      "class": "negation",
+      "sentence_index": 7,
+      "replacement": "do not need",
+      "original_span": "need",
+      "planted_sentence": "It took only a few minutes, and it was worth it, because plants do not need water.",
+      "original_sentence": "It took only a few minutes, and it was worth it, because plants need water.",
+      "word_start": 138,
+      "word_end": 140,
+      "span_start_ms": 42750,
+      "span_end_ms": 43325,
+      "sentence_end_ms": 43650
+    },
+    {
+      "error_id": "sample-e4",
+      "passage_id": "p2",
+      "class": "swapped_fact",
+      "sentence_index": 2,
+      "replacement": "blue",
+      "original_span": "red",
+      "planted_sentence": "A tomato is ready to pick when it turns blue.",
+      "original_sentence": "A tomato is ready to pick when it turns red.",
+      "word_start": 43,
+      "word_end": 43,
+      "span_start_ms": 13425,
+      "span_end_ms": 13725,
+      "sentence_end_ms": 13725
+    },
+    {
+      "error_id": "sample-e5",
+      "passage_id": "p2",
+      "class": "number",
+      "sentence_index": 6,
+      "replacement": "fifty",
+      "original_span": "twenty",
+      "planted_sentence": "Each of the two tomato plants gave me ten tomatoes, so I picked fifty.",
+      "original_sentence": "Each of the two tomato plants gave me ten tomatoes, so I picked twenty.",
+      "word_start": 109,
+      "word_end": 109,
+      "span_start_ms": 33213,
+      "span_end_ms": 33638,
+      "sentence_end_ms": 33638
+    }
+  ]
+}

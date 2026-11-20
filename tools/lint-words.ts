@@ -36,8 +36,11 @@ export function scanText(text: string, banned: string[], allowed: string[], file
 }
 
 // Files the spec lists: README, PRIVACY.md, TERMS.md, article/, docs/, interface strings, video captions.
-// PREREG.md is public too, so it is checked as well.
-const TOP_FILES = ['README.md', 'PRIVACY.md', 'TERMS.md', 'PREREG.md'];
+// PREREG.md is public too, so it is checked as well, and so is the README of the headstart sample.
+// Not the sample's texts and plan: this prints the line of every hit, and the participant of a demo
+// take has not heard them (spec 7.11). tools/sample checks those blind, as gate/check-texts.ts does
+// for the pack texts and tools/freeze/level-sample.test.ts for the doctor sample.
+const TOP_FILES = ['README.md', 'PRIVACY.md', 'TERMS.md', 'PREREG.md', 'sample/README.md'];
 const DIRS = ['article', 'docs', 'web/ui', 'web/scenarios', 'video/captions'];
 const WEB_FILES = ['web/index.html', 'web/main.ts'];
 const EXT = /\.(md|txt|html|ts|json|srt|vtt)$/;
