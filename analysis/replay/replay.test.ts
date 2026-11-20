@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { SniffLag } from '../../core/clock/index.ts';
 import type { DetectorInput } from '../../core/detector.ts';
 import {
   G_RESETS_SCHEMA,
@@ -22,6 +23,7 @@ import {
   type Onsets,
   type Verdict,
 } from '../../core/schemas/index.ts';
+import { exampleCalib, exampleVerdict } from '../../core/schemas/examples.ts';
 import { main as gateMain } from '../gate.ts';
 import type { GateDeps } from '../gate/deps.ts';
 import { RETUNE_TAG, frozenParamsText, frozenWithTuning, parseParamsText, withoutStageAKeys } from '../gate/frozen.ts';
@@ -33,7 +35,7 @@ import { sniffOnsetsJson } from '../pack.ts';
 import { gResetSeqs, type SampleLmLike } from '../rivals/index.ts';
 import { main, parseReplayArgs, type ReplayDeps } from '../replay.ts';
 import { findParams, tunedByStageA, tunedStepOf } from './params.ts';
-import { replaySet, sniffEdgeOf, VERDICT_FIELDS, type Check, type ScoredSet, type SetReplay } from './recompute.ts';
+import { calibSniffCheck, replaySet, sniffEdgeOf, VERDICT_FIELDS, verdictMdCheck, type Check, type ScoredSet, type SetReplay } from './recompute.ts';
 import { MARKS_FILE, RESETS_FILE, SNIFFS_FILE, readPublishedSet, setFolderOf, unreadFolderWhy } from './set.ts';
 import { replayTable, tableProblems, type ReplayTable } from './table.ts';
 
@@ -829,13 +831,13 @@ describe('row 4 recounted from sniff_onsets.json (spec 6.3, 9.6, PREREG §4)', (
     set = publish(session, path.join(root, 'sniffs', 'data', 'gate-a'), { marks: true, resets: true, sniffs: true });
   }, 120_000);
 
-  it('recounts every number of row 4 from the onsets when calib.json has no sniff block, as stage B did, and verifies the verdict; exit 0', async () => {
+  it('recounts every number of row 4 from the onsets when calib.json has no sniff block, as stage B did, and every value of verdict.json matches; calib.json differs, since the clocks step writes the block of a lag it measures: exit 1', async () => {
     const v = JSON.parse(fs.readFileSync(path.join(set, 'verdict.json'), 'utf8')) as Verdict;
     expect(v.rows.sniff_lag.n).toBe(5);
     expect(v.rows.sniff_lag.best_case_ms).toBeGreaterThan(0);
     expect(v.rows.sniff_lag.d1_on_sniffs_ms).toBeGreaterThan(0);
     const run = replayDeps(r);
-    expect(await main([set], run.deps)).toBe(0);
+    expect(await main([set], run.deps)).toBe(1);
     expect(run.err).toEqual([]);
     for (const name of ['outcome', 'lo_median_ms', 'hi_median_ms', 'median_over_ms', 'n', 'no_arrival', 'best_case_ms', 'd1_on_sniffs_ms']) {
       expect(lineOf(run.out, `rows.sniff_lag.${name}`)).toMatch(/ MATCH$/);
@@ -845,13 +847,28 @@ describe('row 4 recounted from sniff_onsets.json (spec 6.3, 9.6, PREREG §4)', (
     expect(run.out).toContain(
       '  note: row 4: replay recounts the sniff lag as stage B does (analysis/clocks/compute.ts recountSniffLag), from the 5 sniff onsets sniff_onsets.json lists, the trace of stream.jsonl and calib.json, and D1 on sniffs from those onsets (analysis/gate/sniffs.ts sniffRow)',
     );
-    expect(checksOf(set, r).filter((c) => c.status !== 'MATCH' || c.condition !== null).map((c) => c.name)).toEqual(['params_sha256']);
-    expect(last(run.out)).toMatch(/^replay: verified: the verdict and the five row outcomes of the set are recomputed and match, and no recomputed value differs \(\d+ MATCH, 0 DIFFERS, 0 not recomputable from the set, 1 input\)$/);
+    expect(lineOf(run.out, 'calib.json sniff_lag_ms')).toMatch(/ [0-9a-f]{8} +null +DIFFERS$/);
+    expect(checksOf(set, r).filter((c) => c.status !== 'MATCH' || c.condition !== null).map((c) => c.name)).toEqual(['params_sha256', 'calib.json sniff_lag_ms']);
+    expect(last(run.out)).toBe('replay: 1 recomputed value differs from the set: gate-a calib.json sniff_lag_ms');
+
+    // With the block the clocks step writes for that lag, whose numbers row 4 holds, the set is verified: exit 0.
+    const block = copySet(set, path.join(root, 'sniffs', 'block', 'gate-a'));
+    const row = v.rows.sniff_lag;
+    editJson(path.join(block, 'calib.json'), (c) => {
+      expect(c['sniff_lag_ms'] ?? null).toBeNull();
+      c['sniff_lag_ms'] = { n: row.n, no_arrival: row.no_arrival, lo_median: row.lo_median_ms, hi_median: row.hi_median_ms, median_over_ms: row.median_over_ms };
+    });
+    const measured = replayDeps(r);
+    expect(await main([block], measured.deps)).toBe(0);
+    expect(lineOf(measured.out, 'calib.json sniff_lag_ms')).toMatch(/ ([0-9a-f]{8}) +\1 +MATCH$/);
+    expect(last(measured.out)).toMatch(/^replay: verified: the verdict and the five row outcomes of the set are recomputed and match, and no recomputed value differs \(\d+ MATCH, 0 DIFFERS, 0 not recomputable from the set, 1 input\)$/);
 
     // Without the file every number of row 4 needs audio.wav, and the verdict matches only for the row 4 of verdict.json: exit 3.
+    // There is no recount, so the sniff block of calib.json goes unchecked.
     const bare = publish(session, path.join(root, 'sniffs', 'bare', 'gate-a'), { marks: true, resets: true });
     const without = replayDeps(r);
     expect(await main([bare], without.deps)).toBe(3);
+    expect(without.out.some((l) => l.startsWith('  calib.json sniff_lag_ms '))).toBe(false);
     expect(lineOf(without.out, 'rows.sniff_lag.n')).toMatch(
       /not recomputable from the set: calib\.json has no sniff_lag_ms, so stage B recounted the sniff lag, and the recount needs the sniff onsets stage B finds in audio\.wav channel 0/,
     );
@@ -871,7 +888,7 @@ describe('row 4 recounted from sniff_onsets.json (spec 6.3, 9.6, PREREG §4)', (
       '  note: row 4: replay recounts the sniff lag as stage B does (analysis/clocks/compute.ts recountSniffLag), from the 4 sniff onsets sniff_onsets.json lists, the trace of stream.jsonl and calib.json, and D1 on sniffs from those onsets (analysis/gate/sniffs.ts sniffRow)',
     );
     expect(last(run.out)).toBe(
-      `replay: 5 recomputed values differ from the set: ${['lo_median_ms', 'hi_median_ms', 'n', 'best_case_ms', 'd1_on_sniffs_ms'].map((f) => `gate-a rows.sniff_lag.${f}`).join(', ')}`,
+      `replay: 6 recomputed values differ from the set: ${['lo_median_ms', 'hi_median_ms', 'n', 'best_case_ms', 'd1_on_sniffs_ms'].map((f) => `gate-a rows.sniff_lag.${f}`).join(', ')}, gate-a calib.json sniff_lag_ms`,
     );
   });
 });
@@ -1121,6 +1138,67 @@ describe('the command line and the folders replay reads', () => {
     expect(sniffEdgeOf({ lo: 349.9, hi: 400, over: null, n: 5 })).toBeNull();
     expect(sniffEdgeOf({ lo: null, hi: null, over: 350, n: 5 })).toBeNull();
     expect(sniffEdgeOf({ lo: 120, hi: 150, over: null, n: 0 })).toBeNull();
+  });
+
+  it('checks the sniff block of calib.json against the block the clocks step writes for the recounted lag, a missing block and no lag both null', () => {
+    // A lag as core/clock sniffLag gives it, whose block is the one of the calib.json example.
+    const lag: SniffLag = {
+      sniffs: [],
+      n: 5,
+      noArrival: 0,
+      medianNotArrived: false,
+      medianOverMs: null,
+      loMedianMs: 148.04,
+      hiMedianMs: 171.46,
+      bestCaseMedianMs: 148.04,
+      reading: 'BETWEEN',
+      calib: { n: 5, lo_median: 148, hi_median: 171.5 },
+    };
+    const measured = { onsets: [1, 2, 3, 4, 5], aRef: 0.84, lag };
+    const noLag = { onsets: [], aRef: null, lag: null };
+    const calib = exampleCalib();
+    const hash = sha256Hex(JSON.stringify(calib.sniff_lag_ms));
+    expect(calibSniffCheck(calib, measured)).toEqual({
+      name: 'calib.json sniff_lag_ms',
+      against: 'calib.json',
+      recomputed: hash,
+      candidates: null,
+      published: hash,
+      status: 'MATCH',
+      why: null,
+      condition: null,
+    });
+    const later = { ...calib, sniff_lag_ms: { ...calib.sniff_lag_ms!, hi_median: 171.6 } };
+    expect(calibSniffCheck(later, measured)).toMatchObject({ recomputed: hash, published: sha256Hex(JSON.stringify(later.sniff_lag_ms)), status: 'DIFFERS' });
+    expect(calibSniffCheck(calib, noLag)).toMatchObject({ recomputed: null, published: hash, status: 'DIFFERS' });
+    const bare = { ...calib };
+    delete bare.sniff_lag_ms;
+    for (const none of [bare, { ...calib, sniff_lag_ms: null }]) {
+      expect(calibSniffCheck(none, measured)).toMatchObject({ recomputed: hash, published: null, status: 'DIFFERS' });
+      expect(calibSniffCheck(none, noLag)).toMatchObject({ recomputed: null, published: null, status: 'MATCH' });
+    }
+  });
+
+  it('takes verdict.md in the wording of row 4 the recount gives, and either wording at a threshold without the recount', () => {
+    const v = exampleVerdict();
+    // A hi median of 150.0 ms sits on the PASS threshold: stage B may have graded the medians before rounding.
+    const edge: Verdict = { ...v, rows: { ...v.rows, sniff_lag: { ...v.rows.sniff_lag, hi_median_ms: 150 } } };
+    const md = (verdict: Verdict, gradedUnrounded: boolean): string => verdictMarkdown(verdict, verdict.run, { sniff: { gradedUnrounded } });
+    const status = (verdict: Verdict, text: string, gradedUnrounded: boolean | null): string => verdictMdCheck({ verdict, verdictMd: text }, gradedUnrounded).check.status;
+    expect(md(edge, true)).toContain('; graded on the medians before rounding');
+    expect(md(edge, false)).not.toContain('graded on the medians before rounding');
+    expect([status(edge, md(edge, false), null), status(edge, md(edge, true), null)]).toEqual(['MATCH', 'MATCH']);
+    expect([status(edge, md(edge, false), false), status(edge, md(edge, true), false)]).toEqual(['MATCH', 'DIFFERS']);
+    expect([status(edge, md(edge, false), true), status(edge, md(edge, true), true)]).toEqual(['DIFFERS', 'MATCH']);
+    // Off a threshold, without the recount, only the wording without the clause stands.
+    expect([status(v, md(v, false), null), status(v, md(v, true), null)]).toEqual(['MATCH', 'DIFFERS']);
+    // The note quotes the line of row 4 against the one stage B writes.
+    const theirs = md(edge, true).split('\n');
+    const mine = md(edge, false).split('\n');
+    const i = theirs.findIndex((l) => l.includes('graded on the medians before rounding'));
+    expect(verdictMdCheck({ verdict: edge, verdictMd: md(edge, true) }, false).note).toBe(
+      `verdict.md line ${i + 1} reads ${JSON.stringify(theirs[i])}, where stage B writes ${JSON.stringify(mine[i])} from verdict.json (analysis/gate/verdict-text.ts)`,
+    );
   });
 
   it("tunes again only params that hold stage A's tuning, whatever the pack", () => {

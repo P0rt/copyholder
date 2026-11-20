@@ -19,9 +19,10 @@
 //   readings, every null a reset and none (gReadings);
 // - the sniff onsets of row 4: audio.wav channel 0 after the sniff_<i> step marks
 //   (clocks/compute.ts recountSniffLag); pack writes them into set.ts SNIFFS_FILE, and replay
-//   recounts the sniff lag from them as stage B does (sniffs.ts sniffRecountFrom). Without that
-//   file best_case_ms and d1_on_sniffs_ms are not recomputable from the set, nor is every number
-//   of row 4 when calib.json has no sniff block, and its grade has two readings when a median of
+//   recounts the sniff lag from them as stage B does (sniffs.ts sniffRecountFrom) and checks the
+//   sniff block of calib.json against the recount (calibSniffCheck). Without that file
+//   best_case_ms and d1_on_sniffs_ms are not recomputable from the set, nor is every number of
+//   row 4 when calib.json has no sniff block, and its grade has two readings when a median of
 //   calib.json sits on a threshold (sniffSides).
 // A value that differs between those readings MATCHes when one reading gives every such value of
 // verdict.json at once, and the line names that condition; analysis/replay.ts counts the verdict
@@ -30,7 +31,7 @@
 import { chunkLayout, SNIFF_KILL_MIN_MS, SNIFF_PASS_MAX_MS, type Stamp } from '../../core/clock/index.ts';
 import { d1ParamsFromFrozen, type FrozenParamsLike, type Sign } from '../../core/detector.ts';
 import { combineGateVerdict, GATE_OUTCOMES, VERDICT_ROWS, type ClockReport, type GateOutcome, type Onsets, type Verdict } from '../../core/schemas/index.ts';
-import type { SniffRecount } from '../clocks/compute.ts';
+import { calibSniffLagBlock, type CalibSniffLagBlock, type SniffRecount } from '../clocks/compute.ts';
 import { GateRefusal, RATE, coreLrtOf, lrtUseFrom, round1, type LrtUse } from '../gate/common.ts';
 import { gSettingsOf, sameJson, variantOf, withoutStageAKeys } from '../gate/frozen.ts';
 import { scoreGate, sniffNotes, type GateScore, type GateScoreInput } from '../gate/score.ts';
@@ -562,8 +563,11 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
   }
 
   // Files of the set beside verdict.json.
-  checks.push(...onsetChecks(set.onsets, set.clockReport));
-  const md = verdictMdCheck(set);
+  checks.push(...onsetChecks(set.onsets, set.clockReport, true));
+  if (set.onsets.labels_sha256 === null) notes.push(NO_LABELS_HASH);
+  if (recount !== null) checks.push(calibSniffCheck(set.calib, recount));
+  // With the recount, stage B's sniff row says how verdict.md words row 4 (sniffs.ts gradedUnrounded).
+  const md = verdictMdCheck(set, recount !== null ? scores[0]!.sniff.gradedUnrounded : null);
   checks.push(md.check);
   if (md.note !== null) notes.push(md.note);
 
@@ -662,15 +666,47 @@ function tuningCheck(f: Field, fromParams: unknown, published: unknown, params: 
 }
 
 /**
+ * calib.json sniff_lag_ms against the recount from SNIFFS_FILE. The recount measures the lag as
+ * the clocks step does (clocks/compute.ts recountSniffLag), so it gives the block the clocks step
+ * writes (calibSniffLagBlock), or null without A_ref, where the clocks step writes null. Stage B
+ * copies n, no_arrival and the medians of calib.json's block into row 4, and when the recount
+ * differs it grades the row on that block and only notes the difference (gate/sniffs.ts
+ * sniffRow). So this line is what ties those values of verdict.json to the recording. A
+ * calib.json without a sniff block reads as null: beside a recount that measures a lag it
+ * differs, since the clocks step writes the block whenever it measures one. Each block is shown
+ * by the first 8 hex digits of the SHA-256 of its JSON, keys in the order the clocks step writes
+ * them.
+ */
+export function calibSniffCheck(calib: PublishedSet['calib'], recount: SniffRecount): Check {
+  const mine = recount.lag === null ? null : calibSniffLagBlock(recount.lag);
+  const theirs = calibSniffBlockOf(calib);
+  const shown = (b: CalibSniffLagBlock | null): string | null => (b === null ? null : sha256Hex(JSON.stringify(b)));
+  return {
+    name: 'calib.json sniff_lag_ms',
+    against: 'calib.json',
+    recomputed: shown(mine),
+    candidates: null,
+    published: shown(theirs),
+    status: sameJson(mine, theirs) ? 'MATCH' : 'DIFFERS',
+    why: null,
+    condition: null,
+  };
+}
+
+/**
  * verdict.md against the text stage B writes from verdict.json (analysis/gate/verdict-text.ts
  * verdictMarkdown, run of runs as verdict.json numbers it). Only where a median of row 4 sits on
- * a threshold may the row also say that it was graded on the medians before rounding.
+ * a threshold may the row also say that it was graded on the medians before rounding. Stage B
+ * says so when its sniff row does (gate/sniffs.ts gradedUnrounded): with the recount from
+ * SNIFFS_FILE replay knows that (`gradedUnrounded`) and accepts that text alone; without it
+ * (null) either text stands at a threshold.
  */
-function verdictMdCheck(set: PublishedSet): { check: Check; note: string | null } {
+export function verdictMdCheck(set: Pick<PublishedSet, 'verdict' | 'verdictMd'>, gradedUnrounded: boolean | null): { check: Check; note: string | null } {
   const v = set.verdict;
   const r = v.rows.sniff_lag;
   const edge = sniffEdgeOf({ lo: r.lo_median_ms, hi: r.hi_median_ms, over: r.median_over_ms, n: r.n });
-  const texts = [false, ...(edge !== null ? [true] : [])].map((gradedUnrounded) => verdictMarkdown(v, v.run, { sniff: { gradedUnrounded } }));
+  const wordings = gradedUnrounded !== null ? [gradedUnrounded] : [false, ...(edge !== null ? [true] : [])];
+  const texts = wordings.map((graded) => verdictMarkdown(v, v.run, { sniff: { gradedUnrounded: graded } }));
   const hit = texts.find((t) => t === set.verdictMd);
   const check: Check = {
     name: 'verdict.md',
@@ -694,17 +730,24 @@ function verdictMdCheck(set: PublishedSet): { check: Check; note: string | null 
   };
 }
 
+/** Why labels_sha256 null reads DIFFERS in a set with verdict.json. */
+export const NO_LABELS_HASH =
+  'onsets.json has no labels_sha256, yet the set has verdict.json: stage B refuses an onsets.json without it, as the blind labels of the label step are missing (analysis/gate/inputs.ts requireLabelsHash, spec 9.5 step 3), so no verdict was scored on this one, and labels_sha256 reads DIFFERS';
+
 /**
  * The values the label step writes from onsets.json (analysis/label.ts): labels_sha256, and the
- * P90 of |auto - manual| in clock_report.json, which stage B reads there. labels_sha256 null is
- * what the onsets step writes, before any event holds a blind label or a hand mark (core/schemas
- * refuses either without the hash), so it stands as recomputed while none does, also with no
- * event at all, where the label step would write the hash of no label. Any other value is
- * recomputed as the hash of the labels the events carry.
+ * P90 of |auto - manual| in clock_report.json, which stage B reads there. labels_sha256 is
+ * recomputed as the hash of the labels the events carry. In a set with verdict.json
+ * (`withVerdict`) null reads DIFFERS whatever the events carry: stage B refuses an onsets.json
+ * without the hash (NO_LABELS_HASH), so stage B never scored one. In a set without verdict.json
+ * null is what the onsets step writes, before any event holds a blind label or a hand mark
+ * (core/schemas refuses either without the hash), so there it stands as recomputed while none
+ * does, also with no event at all, where the label step would write the hash of no label.
  */
-function onsetChecks(onsets: Onsets, clockReport: ClockReport | null): Check[] {
-  const unlabelled = onsets.labels_sha256 === null && onsets.events.every((e) => e.label === null && e.manual === null);
-  const out = [plain('onsets.json labels_sha256', 'onsets.json', unlabelled ? null : onsetsLabelsSha256(onsets, sha256Hex), onsets.labels_sha256)];
+function onsetChecks(onsets: Onsets, clockReport: ClockReport | null, withVerdict: boolean): Check[] {
+  const unlabelled = !withVerdict && onsets.labels_sha256 === null && onsets.events.every((e) => e.label === null && e.manual === null);
+  const labels = plain('onsets.json labels_sha256', 'onsets.json', unlabelled ? null : onsetsLabelsSha256(onsets, sha256Hex), onsets.labels_sha256);
+  const out = [withVerdict && onsets.labels_sha256 === null ? { ...labels, status: 'DIFFERS' as const } : labels];
   if (clockReport !== null) {
     const p90 = onsetErrorBlock(onsets, RATE).p90_abs_auto_minus_manual_ms;
     out.push(plain('clock_report.json onset.p90_abs_auto_minus_manual_ms', 'clock_report.json', p90, clockReport.onset?.p90_abs_auto_minus_manual_ms ?? null));
@@ -722,7 +765,7 @@ export const NO_VERDICT =
  */
 export function replayVerdictless(set: VerdictlessSet): VerdictlessReplay {
   const verdict: Check = { name: 'verdict', against: 'verdict.json', recomputed: undefined, candidates: null, published: undefined, status: 'NOT_RECOMPUTABLE', why: NO_VERDICT, condition: null };
-  const checks = [verdict, ...(set.onsets !== null ? onsetChecks(set.onsets, set.clockReport) : [])];
+  const checks = [verdict, ...(set.onsets !== null ? onsetChecks(set.onsets, set.clockReport, false) : [])];
   const files = set.read.length === 1 ? set.read[0]! : `${set.read.slice(0, -1).join(', ')} and ${set.read[set.read.length - 1]!}`;
   const notes = [`replay read ${files} of this set and found ${set.read.length === 1 ? 'it' : 'each'} valid (core/schemas); with no verdict it scores nothing`];
   if (set.pack === 'A' && set.onsets === null) {
