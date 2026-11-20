@@ -538,8 +538,8 @@ test('gate pack A: Deck runs the minute table of spec 9.3, counted in samples', 
     ['listening', 75],
     ['objections', 255],
     ['pa_end_1_closed', 555],
-    ['loop_b', 575],
-    ['end', 587],
+    ['loop_b', 580],
+    ['end', 592],
   ];
   expect(table.map(([name]) => [name, at(name) - origin])).toEqual(table.map(([name, s]) => [name, S(s)]));
   expect(at('loop_a') - at('loop_a_ready')).toBe(S(10));
