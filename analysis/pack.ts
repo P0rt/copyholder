@@ -30,6 +30,8 @@
 // replaces) before anything is written, then written into a temporary folder beside data/<id>/
 // and renamed. A set that holds either is refused. Only --blank-home-paths rewrites a file: it
 // replaces the paths into a home folder in events.jsonl before those checks (blankHomePaths).
+// manifest.json then holds the SHA-256 of events.jsonl as published, not that of the session
+// copy, which would confirm a guessed path (withPublishedEventsHash).
 //
 // --devices-ok      the device and machine names printed are fine as they stand in the published
 //                   manifest. Without it pack prints them and writes nothing (exit 1).
@@ -38,8 +40,10 @@
 // --with-audio <id> also publishes audio.wav; the value repeats the session id as confirmation.
 // --blank-home-paths replaces each path into a home folder in the strings of events.jsonl, such
 //                   as an SDK or tap error message, by "<home path>", and adds a note naming the
-//                   line and field of each, never the path. Without it such a path refuses the set;
-//                   in any other file it always does, as pack rewrites no other file.
+//                   line and field of each, never the path. The hash of events.jsonl in
+//                   manifest.json is then that of the file as published, with a note that says so.
+//                   Without the option such a path refuses the set; in any other file it always
+//                   does, as pack rewrites no other file.
 // --replace         writes the set again over an existing data/<id>/ (swapped in by renames).
 //
 // Ledger (spec 8.5): a gate record needs its quickcheck step. When the step order allows `pack`
@@ -662,14 +666,16 @@ interface BuiltSet {
  * stream.jsonl, marks.jsonl, g_resets.json, events.jsonl, audio_env.json and audio.wav end before
  * that sample, and onsets.json stays out. With --blank-home-paths the paths into a home folder in
  * events.jsonl are replaced here, so every check after it and the pack step's hashes see the
- * file as it is published.
+ * file as it is published. When that changes the file, manifest.json is built again after it,
+ * with the hash of events.jsonl as published (withPublishedEventsHash).
  */
 function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: number | null): BuiltSet {
   const notes: string[] = [];
   const files = new Map<string, Buffer>();
   const source = (name: string): Buffer | null => sources.bytes.get(name) ?? null;
+  const manifestJson = (m: Manifest): Buffer => Buffer.from(toJsonText(m, 'manifest.json', 2), 'utf8');
 
-  files.set('manifest.json', Buffer.from(toJsonText(published, 'manifest.json', 2), 'utf8'));
+  files.set('manifest.json', manifestJson(published));
 
   const detectorIn = source(SESSION_FILES.detectorIn);
   const stamps = source(SESSION_FILES.stamps);
@@ -708,7 +714,14 @@ function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: nu
       notes.push(`events.jsonl line ${String(tail.tailLine)}: partial last line dropped (no newline, not valid JSON: the recording was cut off)`);
     }
     const kept = cut !== null ? Buffer.from(eventsBefore(tail.complete, cut), 'utf8') : tail.tail !== null ? Buffer.from(tail.complete, 'utf8') : events;
-    files.set('events.jsonl', args.blankHomePaths ? blankHomePaths(kept, notes) : kept);
+    const blanked = args.blankHomePaths ? blankHomePaths(kept, notes) : kept;
+    files.set('events.jsonl', blanked);
+    const rehashed = blanked.equals(kept) ? null : withPublishedEventsHash(published, blanked);
+    if (rehashed !== null) {
+      // manifest.json is built again here and keeps its place in `files`.
+      files.set('manifest.json', manifestJson(rehashed));
+      notes.push('manifest.json holds the SHA-256 of events.jsonl as published, not of the session copy, whose hash would confirm a guessed home path (--blank-home-paths)');
+    }
   }
   for (const name of [...COPIED_FILES, ...VERDICT_FILES]) {
     const b = source(name);
@@ -932,6 +945,19 @@ export function blankHomePaths(events: Buffer, notes: string[]): Buffer {
     return `${bom}${JSON.stringify(blanked)}${cr}`;
   });
   return changed ? Buffer.from(lines.join('\n'), 'utf8') : events;
+}
+
+/**
+ * The public manifest with "sha256:" and the hash of `events`, events.jsonl as published, in place
+ * of the hash host took of the session copy when the recording closed; null when `files` holds no
+ * hash of events.jsonl (the recording did not close), so there is none to replace. Once
+ * blankHomePaths has replaced a path, the hash of the session copy would let anyone with the set
+ * confirm a guessed path, and the account name in it: the rest of the file is published, and the
+ * rest of such a path is easy to guess from the repository. The other fields stay as they are.
+ */
+function withPublishedEventsHash(published: Manifest, events: Buffer): Manifest | null {
+  if (!Object.hasOwn(published.files, SESSION_FILES.events)) return null;
+  return { ...published, files: { ...published.files, [SESSION_FILES.events]: `sha256:${sha256Hex(events)}` } };
 }
 
 /** Files of a set whose strings are scanned: every file but manifest.json, which has its own checks, and audio.wav. */

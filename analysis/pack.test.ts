@@ -39,7 +39,7 @@ import { nextRecordingAdvice } from './gate/inputs.ts';
 import { sha256Hex } from './lib/ledger.ts';
 import { gateSteps } from './lib/steps.ts';
 import { encodeStereoFloatWav, readWavHeader } from './lib/wav.ts';
-import { SET_ORDER, blankHomePathsIn, gResetsJson, holdsHomePath, main, marksJsonl, parsePackArgs, type PackDeps } from './pack.ts';
+import { SET_ORDER, blankHomePathsIn, gResetsJson, holdsHomePath, main, marksJsonl, parsePackArgs, publishedManifest, type PackDeps } from './pack.ts';
 import { ENV_STEP_FRAMES, SILENCE_DB, levelDb, readSessionAudio } from './pack/audio.ts';
 import { formatBytes, whyNoSet, whyNotMeasured } from './pack/rules.ts';
 import { gResetSeqs, type SampleLmLike } from './rivals/index.ts';
@@ -583,6 +583,14 @@ describe('strings of the set that the manifest keeps private (spec 8.7, PRIVACY.
   const leakHead = (id: string): string =>
     `pack refused: the set for data/${id}/ would publish what the manifest keeps private (spec 8.7, PRIVACY.md); pack copies the files as they are, and only --blank-home-paths rewrites one of them, events.jsonl:\n`;
 
+  /** The note pack prints when the published manifest.json holds the hash of events.jsonl as published. */
+  const MANIFEST_NOTE =
+    'note: manifest.json holds the SHA-256 of events.jsonl as published, not of the session copy, whose hash would confirm a guessed home path (--blank-home-paths)';
+
+  /** The public copy of a session's manifest.json, as pack publishes it when no path is replaced: every hash as host took it. */
+  const publicManifestText = (dir: string): string =>
+    toJsonText(publishedManifest(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as Manifest, []), 'manifest.json', 2);
+
   it('refuses a path into a home folder in events.jsonl (an SDK error message), naming file, line and field but not the text, and the option that replaces it', async () => {
     headstart('headstart-1', { events: [...exampleEvents(), sdkError('could not open /Users/someone/copyholder/live/node_modules/x/graph.binarypb')] });
     const r = await pack(['headstart-1', ...OK]);
@@ -626,6 +634,80 @@ describe('strings of the set that the manifest keeps private (spec 8.7, PRIVACY.
     expect(step.step).toBe('pack');
     expect(step.out_sha256['data/gate-b/events.jsonl']).toBe(sha256Hex(published));
     expect(step.out_sha256['data/gate-b/events.jsonl']).not.toBe(g.hashes['events.jsonl']);
+  });
+
+  it('--blank-home-paths: once a path is replaced, the published manifest.json holds the SHA-256 of events.jsonl as published, never that of the session copy, which would confirm a guessed path; the pack step hashes that manifest.json', async () => {
+    const where = '/Users/someone/copyholder/sessions/gate-b/x';
+    const g = writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', events: [...exampleEvents(), sdkError(`ENOENT: no such file or directory, open '${where}'`)] });
+    const session = g.hashes['events.jsonl']!;
+    const asCopied = publicManifestText(g.dir);
+    expect(asCopied).toContain(`"events.jsonl": "sha256:${session}"`);
+    const r = await pack(['gate-b', ...OK, '--blank-home-paths']);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    const events = fs.readFileSync(path.join(setDir('gate-b'), 'events.jsonl'));
+    const text = fs.readFileSync(path.join(setDir('gate-b'), 'manifest.json'), 'utf8');
+    const files = (JSON.parse(text) as Manifest).files;
+    // No hash in it is that of the session copy: events.jsonl has the hash of the file as published.
+    expect(Object.values(files)).not.toContain(`sha256:${session}`);
+    expect(files['events.jsonl']).toBe(`sha256:${sha256Hex(events)}`);
+    // The right guess gives the session copy back, and no file of the set holds its hash.
+    expect(sha256Hex(events.toString('utf8').replace('<home path>', where))).toBe(session);
+    expect(Object.values(readSet('gate-b')).filter((t) => t !== null && t.includes(session))).toEqual([]);
+    // Only that hash differs from the public copy of the session's manifest.json, which stays as the record step hashed it.
+    expect(text).toBe(asCopied.replace(`sha256:${session}`, `sha256:${sha256Hex(events)}`));
+    expect(sha256Hex(fs.readFileSync(path.join(g.dir, 'manifest.json')))).toBe(g.manifestSha);
+    // A note per path, then one for manifest.json; no hash and nothing of the path in the output.
+    expect(r.out.filter((l) => l.endsWith('(--blank-home-paths)'))).toEqual([
+      'note: events.jsonl line 5, message: a path into a home folder is replaced by "<home path>" (--blank-home-paths)',
+      MANIFEST_NOTE,
+    ]);
+    expect(r.all.includes(session.slice(0, 8))).toBe(false);
+    expect(r.all.includes('someone')).toBe(false);
+    // The set validates, and the pack step hashes manifest.json as published.
+    expect(validatePublishedFolder(readSet('gate-b'))).toEqual([]);
+    const step = lastLedgerLine(g.ledgerText());
+    expect(step.step).toBe('pack');
+    expect(step.out_sha256['data/gate-b/manifest.json']).toBe(sha256Hex(text));
+    expect(step.out_sha256['data/gate-b/manifest.json']).not.toBe(sha256Hex(asCopied));
+  });
+
+  it('--blank-home-paths that replaces nothing, and pack without it: manifest.json is the public copy of the session one byte for byte, with the hash host took of events.jsonl, and no note', async () => {
+    const g = writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', events: [...exampleEvents(), sdkError('fetch http://127.0.0.1:5173/home/x failed, see https://example.org/Users/help')] });
+    const asCopied = publicManifestText(g.dir);
+    expect(asCopied).toContain(`"events.jsonl": "sha256:${g.hashes['events.jsonl']!}"`);
+    for (const argv of [['gate-b', ...OK], ['gate-b', ...OK, '--blank-home-paths', '--replace']]) {
+      const r = await pack(argv);
+      expect(r.err).toEqual([]);
+      expect(r.code).toBe(0);
+      expect(r.out.filter((l) => l.endsWith('(--blank-home-paths)'))).toEqual([]);
+      expect(readSet('gate-b')['manifest.json']).toBe(asCopied);
+      expect(lastLedgerLine(g.ledgerText()).out_sha256['data/gate-b/manifest.json']).toBe(sha256Hex(asCopied));
+    }
+  });
+
+  it('--blank-home-paths on a headstart take: the session folder stays as it was, so packing again passes the check against the hashes of its manifest.json; a take that did not close has no hash of events.jsonl to replace', async () => {
+    const events = [...exampleEvents(), sdkError('could not open /Users/someone/x')];
+    const rec = headstart('headstart-1', { events });
+    for (const argv of [['headstart-1', ...OK, '--blank-home-paths'], ['headstart-1', ...OK, '--blank-home-paths', '--replace']]) {
+      const r = await pack(argv);
+      expect(r.err).toEqual([]);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain(MANIFEST_NOTE);
+      const published = fs.readFileSync(path.join(setDir('headstart-1'), 'events.jsonl'));
+      expect((JSON.parse(readSet('headstart-1')['manifest.json']!) as Manifest).files['events.jsonl']).toBe(`sha256:${sha256Hex(published)}`);
+    }
+    expect(sha256Hex(fs.readFileSync(path.join(rec.dir, 'manifest.json')))).toBe(rec.manifestSha);
+    expect(sha256Hex(fs.readFileSync(path.join(rec.dir, 'events.jsonl')))).toBe(rec.hashes['events.jsonl']);
+
+    const open = headstart('headstart-2', { events, hashFiles: false });
+    const r = await pack(['headstart-2', ...OK, '--blank-home-paths']);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(r.out.filter((l) => l.endsWith('(--blank-home-paths)'))).toEqual([
+      'note: events.jsonl line 5, message: a path into a home folder is replaced by "<home path>" (--blank-home-paths)',
+    ]);
+    expect(readSet('headstart-2')['manifest.json']).toBe(publicManifestText(open.dir));
   });
 
   it('--blank-home-paths rewrites events.jsonl only: a path into a home folder in any other file still refuses the set', async () => {
