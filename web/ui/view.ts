@@ -36,7 +36,7 @@ export interface PageView {
   /** Resolves the consent token on 'I agree, start' (minted in its click handler), null on Cancel. */
   consent(text: ConsentText, onAgreeClick: () => void): Promise<Consent | null>;
   instruction(ins: Instruction, ready: Promise<unknown>): Promise<void>;
-  run(opts: { meters: boolean; devicePanel: boolean; levelsDb: readonly number[] }): RunScreen;
+  run(opts: { meters: boolean; devicePanel: boolean; countdown: boolean; levelsDb: readonly number[] }): RunScreen;
   /**
    * host's quickcheck line in large type: GOOD RECORDING or RE-RECORD NOW: <reason> (spec 9.3). It
    * takes the prompt's place while the run screen is up, else it goes under the current message
@@ -216,6 +216,7 @@ export function createPageView(doc: Document): PageView {
           note.textContent = text;
         },
         countdown(text) {
+          if (!opts.countdown) return; // gate and smoke: nothing else moves in a recording
           countdown.hidden = text === null;
           countdown.textContent = text ?? '';
         },

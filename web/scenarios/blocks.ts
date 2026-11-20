@@ -6,7 +6,7 @@ import { secondsToSamples, type Step } from './format.ts';
 export const PROMPT = {
   startingCamera: 'Starting camera...',
   signalOk: 'Signal OK',
-  holdEarcup: 'Press one earpiece onto the headset microphone and hold both still until the clicks stop',
+  holdEarcup: 'Take both earpieces out. Press one onto the microphone and hold it still until the clicks stop',
   headsetOn: 'Headset on. Sit still.',
   breatheNormally: 'Breathe normally',
   breatheIn: 'Breathe in',
@@ -22,7 +22,7 @@ export const PROMPT = {
 export const SECONDS = {
   /** 'Signal OK' shown after the SDK wait (assumption). */
   signalOk: 2,
-  /** Earpiece prompt before the clicks start: time to take one earpiece off and hold it on the microphone (assumption; 5 s was too short with earbuds). */
+  /** Earpiece prompt before the clicks start: time to take both earpieces out and hold one on the microphone (assumption; 5 s was too short with earbuds). */
   loopReady: 10,
   /** Loop check: 10 clicks, about 12 s (spec 6.3, 9.3). */
   loopClicks: 12,

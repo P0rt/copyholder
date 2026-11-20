@@ -113,7 +113,7 @@ function failureText(reason: FailReason, detail: string): string {
 }
 
 function run(view: PageView, session: Session, plan: ScenarioPlan, steps: Step[], assets: PlanAssets, gain: number, deckFailure: FailureLatch): void {
-  const screen = view.run({ meters: plan.meters, devicePanel: plan.devicePanel, levelsDb: OUTPUT_LEVELS_DB });
+  const screen = view.run({ meters: plan.meters, devicePanel: plan.devicePanel, countdown: plan.countdown, levelsDb: OUTPUT_LEVELS_DB });
   screen.devices(session.settings);
   const releaseWakeLock = holdWakeLock(navigator.wakeLock, document, log);
   const unwatch = watchPageEvents({ win: window, doc: document, mediaDevices: navigator.mediaDevices, track: session.track }, (ev) =>
@@ -166,7 +166,9 @@ function run(view: PageView, session: Session, plan: ScenarioPlan, steps: Step[]
       },
       // The verdict also comes after Stop or an abort; it then goes under that message (spec 9.3).
       verdict: (ok, text) => {
-        if (text) view.verdict(ok, text);
+        // No line when saving failed, Ctrl+C came first or quickcheck printed nothing: the page says so
+        // instead of keeping the end prompt's promise of a result.
+        view.verdict(ok, text || 'No result from the quick check here. The terminal shows what happened.');
         session.terminateWorker();
       },
       log,

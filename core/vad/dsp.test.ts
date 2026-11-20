@@ -130,11 +130,14 @@ describe('median, select and MAD', () => {
         (values, kRaw) => {
           const k = kRaw % values.length;
           const sorted = [...values].sort((a, b) => a - b);
-          expect(selectInPlace(Float64Array.from(values), values.length, k)).toBe(sorted[k]);
+          // -0 and +0 are equal numbers in any order, but toBe tells them apart (Object.is): adding 0
+          // turns -0 into +0 on both sides, so a select that returns the other zero still agrees.
+          const same = (got: number, want: number | undefined) => expect(got + 0).toBe((want ?? NaN) + 0);
+          same(selectInPlace(Float64Array.from(values), values.length, k), sorted[k]);
           const med = medianInPlace(Float64Array.from(values), values.length);
-          expect(med).toBe(sortedMedian(values));
+          same(med, sortedMedian(values));
           const mad = madInPlace(Float64Array.from(values), values.length, med);
-          expect(mad).toBe(sortedMedian(values.map((v) => Math.abs(v - med))));
+          same(mad, sortedMedian(values.map((v) => Math.abs(v - med))));
         },
       ),
     );

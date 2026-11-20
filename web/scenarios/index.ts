@@ -51,6 +51,8 @@ export interface ScenarioPlan {
   meters: boolean;
   /** Show the device names and microphone flags (doctor, spec 7.12). */
   devicePanel: boolean;
+  /** Show "Next step in m:ss" on long quiet steps (doctor only, as the meters). */
+  countdown: boolean;
   build(assets: ScenarioAssets): Step[];
 }
 
@@ -69,6 +71,7 @@ function gatePlan(pack: GatePack): ScenarioPlan {
     cuesFile: GATE_CLIPS.cues,
     meters: false,
     devicePanel: false,
+    countdown: false,
     build: (assets) =>
       buildGateScenario(pack, assets.cuesMs ?? [], {
         listen: assets.clipSamples.get(GATE_CLIPS.listen),
@@ -90,6 +93,7 @@ function doctorPlan(levelOnly: boolean, narrator: readonly string[]): ScenarioPl
     cuesFile: null,
     meters: true,
     devicePanel: true,
+    countdown: true,
     build: (assets) => {
       const samples = clip ? (assets.clipSamples.get(clip) ?? 0) : 0;
       return levelOnly && clip ? buildDoctorLevelScenario(clip, samples) : buildDoctorScenario(clip, samples);
@@ -107,6 +111,7 @@ const SMOKE_PLAN: ScenarioPlan = {
   cuesFile: null,
   meters: false,
   devicePanel: false,
+  countdown: false,
   build: buildSmokeScenario,
 };
 

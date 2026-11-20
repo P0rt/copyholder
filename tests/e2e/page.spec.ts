@@ -497,6 +497,16 @@ test('gate pack A: Deck runs the minute table of spec 9.3, counted in samples', 
 
   // The SDK is not ready: the scenario holds on its first step, whatever the sample count does.
   await expect(page.locator('#prompt')).toHaveText('Starting camera...');
+  // Nothing else moves on the gate screen: the "Next step in" countdown is doctor's only (web/scenarios/index.ts).
+  await page.evaluate(() => {
+    const w = window as unknown as { __countdownShown: boolean };
+    const el = document.getElementById('countdown');
+    if (!el) throw new Error('no #countdown on the run screen');
+    w.__countdownShown = !el.hidden || el.textContent !== '';
+    new MutationObserver(() => {
+      if (!el.hidden || el.textContent !== '') w.__countdownShown = true;
+    }).observe(el, { attributes: true, childList: true, characterData: true, subtree: true });
+  });
   // The page's MessageChannel joins Deck and the worker directly: a pkt from the worker comes back as an arr stamp.
   await expect.poll(async () => (await standInReport(page))?.deckPortOk).toBe(true);
   expect((await standInReport(page))?.received.slice(0, 3)).toEqual(['init', 'hello', 'consent']);
@@ -553,6 +563,7 @@ test('gate pack A: Deck runs the minute table of spec 9.3, counted in samples', 
   expect(done.n).toBe(at('end'));
   await expect.poll(async () => pageMessages((await trace(page)).toWorker).at(-1)).toEqual({ k: 'end', reason: 'done' });
   await expect(page.locator('#prompt')).toHaveText('GOOD RECORDING');
+  expect(await page.evaluate(() => (window as unknown as { __countdownShown: boolean }).__countdownShown)).toBe(false);
   await expect(page.locator('#rec')).toBeHidden();
   await expect(page.locator('#dot')).toBeHidden();
   const tracks = await page.evaluate(() => (window as unknown as { __streams: MediaStream[] }).__streams.flatMap((s) => s.getTracks().map((k) => k.readyState)));
@@ -780,7 +791,9 @@ test.describe('production build with the real Deck and the stand-in worker', () 
     await expect.poll(async () => (await steps()).map((m) => m.name).includes('loop_a'), { timeout: 15_000 }).toBe(true);
     const n = new Map((await steps()).map((m) => [m.name, m.n]));
     expect((n.get('loop_a') ?? 0) - (n.get('loop_a_ready') ?? 0)).toBe(S(10));
-    await expect(page.locator('#prompt')).toHaveText('Press one earpiece onto the headset microphone and hold both still until the clicks stop');
+    await expect(page.locator('#prompt')).toHaveText('Take both earpieces out. Press one onto the microphone and hold it still until the clicks stop');
+    // Doctor counts its long quiet steps down: the 12 s of clicks.
+    await expect(page.locator('#countdown')).toHaveText(/^Next step in 0:(0\d|1[0-2])$/);
     const t = await trace(page);
     expect(t.fromDeck.filter((m) => m.k === 'error')).toEqual([]);
     expect(t.processorErrors).toBe(0);
@@ -857,7 +870,7 @@ test.describe('production build with the real Deck and worker', () => {
     expect(await steps()).toEqual(['devices']);
     await page.click('#go');
     await expect.poll(steps, { timeout: 10_000 }).toEqual(['devices', 'loop_a_ready']);
-    await expect(page.locator('#prompt')).toHaveText('Press one earpiece onto the headset microphone and hold both still until the clicks stop');
+    await expect(page.locator('#prompt')).toHaveText('Take both earpieces out. Press one onto the microphone and hold it still until the clicks stop');
     const t = await trace(page);
     const reported = t.fromDeck.filter((m) => m.k === 'step') as Array<{ n: number }>;
     expect(reported[1]?.n).toBeGreaterThan(reported[0]?.n ?? Infinity);

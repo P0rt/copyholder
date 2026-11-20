@@ -242,7 +242,7 @@ describe('doctor', () => {
     // Silence the microphone over loop check B: the clicks reach channel 1 only.
     session.ch0.fill(0, fx.truth.steps['loop_b']!, session.ch0.length);
     const r = await doctor(session);
-    expect(last(r.out)).toBe('DOCTOR FAIL: clicks of loop check B not found: hold the earcup on the microphone during the clicks');
+    expect(last(r.out)).toBe('DOCTOR FAIL: clicks of loop check B not found: press one earpiece onto the microphone and hold it still during the clicks');
   });
 
   it('the level run changes only the gain and the leak, copying the rest from the latest full doctor', async () => {

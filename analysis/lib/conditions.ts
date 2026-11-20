@@ -155,7 +155,7 @@ export function audioContinuous(s: ConditionSession): ConditionResult {
 
 function loopWords(block: 'A' | 'B', m: LoopMeasurement | null): string {
   if (m === null) return `loop check ${block}: no clicks stamped`;
-  return `loop check ${block}: ${ms(m.L_rt_ms)}, ${m.found} of ${m.total} clicks heard`;
+  return `loop check ${block}: ${ms(m.L_rt_ms)}, ${m.found} of ${m.total} clicks found at the same delay`;
 }
 
 /** The L_rt rule of spec 6.3 over both loop checks, with what was measured. */
@@ -175,8 +175,8 @@ export function loopChecks(s: ConditionSession, ctx: ConditionContext = {}): Con
   for (const block of ['A', 'B'] as const) {
     const m = loops[block];
     if (m === null || m.L_rt_ms === null) {
-      const heard = m === null ? 'no clicks were stamped' : `only ${m.found} of ${m.total} clicks were heard in the microphone`;
-      return result({ ...base, ok: false, value: null, reason: `loop check ${block} was not found: ${heard}; hold the earcup on the microphone during the clicks` });
+      const heard = m === null ? 'no clicks were stamped' : `only ${m.found} of ${m.total} clicks were found at the same delay (within 1 ms of their median)`;
+      return result({ ...base, ok: false, value: null, reason: `loop check ${block} was not found: ${heard}; press one earpiece onto the microphone and hold it still during the clicks` });
     }
   }
   const diff = round1(Math.abs(lrt.A! - lrt.B!));

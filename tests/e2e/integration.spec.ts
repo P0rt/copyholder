@@ -75,10 +75,10 @@ const SEEDED_GAIN = 0.1;
 const GAIN_TOLERANCE_DB = 0.5;
 
 /** Loop check A not heard (analysis/lib/conditions.ts loop_checks): the one reason the gate run must fail on. */
-const LOOP_A_REASON = /^loop check A was not found: only \d+ of 10 clicks were heard in the microphone; hold the earcup on the microphone during the clicks$/;
+const LOOP_A_REASON = /^loop check A was not found: only \d+ of 10 clicks were found at the same delay \(within 1 ms of their median\); press one earpiece onto the microphone and hold it still during the clicks$/;
 const GATE_PROBE_WORDS = 'technical failure; fix it and repeat the short probe until it gives GOOD RECORDING (spec 9.4)';
 /** doctor's hard check of the loop clicks (analysis/doctor.ts) when loop check A is not heard. */
-const DOCTOR_LOOP_A = 'clicks of loop check A not found: hold the earcup on the microphone during the clicks';
+const DOCTOR_LOOP_A = 'clicks of loop check A not found: press one earpiece onto the microphone and hold it still during the clicks';
 
 let dist = '';
 let distRoot = '';

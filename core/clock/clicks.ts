@@ -21,7 +21,7 @@ export const CLICK_PEAK = 0.5;
 
 /**
  * Peak of the loop-check clicks in Deck output. Deck plays them at this level whatever the
- * narrator level, since the earpiece is off the ear and pressed on the microphone: at the
+ * narrator level, since both earpieces are out and one is pressed on the microphone: at the
  * narrator's level of the first doctor runs (-9 dB) they reached the microphone about 45 dB
  * below full scale, under the noise of the hand that held the earpiece.
  */

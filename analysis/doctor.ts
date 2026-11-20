@@ -174,7 +174,7 @@ export function analyzeDoctor(s: ConditionSession & Pick<LoadedSession, 'id'>, o
     const words = (b: 'A' | 'B'): string => {
       const m = loops![b];
       if (!m) return 'no clicks stamped';
-      return m.L_rt_ms === null ? `not found (${m.found} of ${m.total} clicks heard)` : `L_rt ${fmt(m.L_rt_ms)} ms, ${m.found} of ${m.total} clicks, spread ${fmt(m.spread_ms ?? 0)} ms`;
+      return m.L_rt_ms === null ? `not found (${m.found} of ${m.total} clicks at the same delay)` : `L_rt ${fmt(m.L_rt_ms)} ms, ${m.found} of ${m.total} clicks, spread ${fmt(m.spread_ms ?? 0)} ms`;
     };
     const a0 = loops.clicks.A?.[0];
     const b0 = loops.clicks.B?.[0];
@@ -182,7 +182,7 @@ export function analyzeDoctor(s: ConditionSession & Pick<LoadedSession, 'id'>, o
     info.push(`Loop check A: ${words('A')}`);
     info.push(`Loop check B: ${words('B')}${loopGapS === null ? '' : `, ${formatSampleTime(b0! - a0!, rate)} after A`}`);
     const found = lrt.A !== null && lrt.B !== null;
-    hard('loop_clicks', found, found ? 'clicks of both loop checks found' : `clicks of loop check ${lrt.A === null ? 'A' : 'B'} not found: hold the earcup on the microphone during the clicks`);
+    hard('loop_clicks', found, found ? 'clicks of both loop checks found' : `clicks of loop check ${lrt.A === null ? 'A' : 'B'} not found: press one earpiece onto the microphone and hold it still during the clicks`);
     if (found) {
       const diff = Math.abs(lrt.A! - lrt.B!);
       info.push(`L_rt rule: ${lrt.rule}${lrt.used === null ? '' : `, L_rt used ${fmt(lrt.used)} ms`}`);

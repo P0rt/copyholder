@@ -286,6 +286,18 @@ describe('scenarioFor: the plan for /api/config', () => {
     expect(plan('session', 'session')).toMatch(/no scenario for mode "session"/);
   });
 
+  it('shows the meters and the "Next step in" countdown in doctor only: nothing else moves in a camera recording', () => {
+    const screen = (mode: string, scenario: string, narrator: string[] = []) => {
+      const p = scenarioFor({ mode, scenario, narrator });
+      return typeof p === 'string' ? p : { meters: p.meters, countdown: p.countdown };
+    };
+    expect(screen('gate', 'gate-A', GATE_NAMES)).toEqual({ meters: false, countdown: false });
+    expect(screen('gate', 'gate-0', GATE_NAMES)).toEqual({ meters: false, countdown: false });
+    expect(screen('smoke', 'smoke')).toEqual({ meters: false, countdown: false });
+    expect(screen('doctor', 'doctor', ['level.wav'])).toEqual({ meters: true, countdown: true });
+    expect(screen('doctor', 'doctor-level', ['level.wav'])).toEqual({ meters: true, countdown: true });
+  });
+
   it('builds the gate steps from the fetched cue list and clip lengths', () => {
     const p = scenarioFor({ mode: 'gate', scenario: 'gate-A', narrator: GATE_NAMES });
     if (typeof p === 'string') throw new Error(p);

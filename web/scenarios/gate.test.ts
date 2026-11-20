@@ -38,8 +38,8 @@ describe('gate scenario, packs A/B/C (spec 9.3)', () => {
     expect(steps.slice(0, 6).map((s) => [s.k, s.name, s.text])).toEqual([
       ['wait', 'sdk_start', 'Starting camera...'],
       ['prompt', 'signal_ok', 'Signal OK'],
-      ['prompt', 'loop_a_ready', 'Press one earpiece onto the headset microphone and hold both still until the clicks stop'],
-      ['clicks', 'loop_a', 'Press one earpiece onto the headset microphone and hold both still until the clicks stop'],
+      ['prompt', 'loop_a_ready', 'Take both earpieces out. Press one onto the microphone and hold it still until the clicks stop'],
+      ['clicks', 'loop_a', 'Take both earpieces out. Press one onto the microphone and hold it still until the clicks stop'],
       ['rest', 'headset', 'Headset on. Sit still.'],
       ['prompt', 'breathe_normally', 'Breathe normally'],
     ]);
@@ -230,7 +230,8 @@ describe('pack 0 (spec 9.4)', () => {
     // Camera time: the SDK wait (Running, then kOk held 5 s) and every step after it, to the end step.
     expect(planned(steps)).toBe(S(166.8));
     expect(S(SDK_OK_HOLD_S) + planned(steps)).toBeLessThanOrEqual(S(3 * 60));
-    // The pack's own clips (about 31 s and 54 s, gate/README.md) set their blocks.
+    // Clips longer than their blocks stretch them (stand-in lengths 31 s and 54 s; the pack's own clips
+    // are shorter, so its plan stays under 3 minutes with the hold).
     expect(planned(buildGateScenario('0', cues, { listen: S(31), objections: S(54) }))).toBe(S(176.8));
   });
 

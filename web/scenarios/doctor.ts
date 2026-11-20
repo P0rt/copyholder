@@ -23,7 +23,7 @@ export const DOCTOR_TEXT = {
   inhaleIn: 'Breathe in loudly',
   inhaleOut: 'Breathe out',
   waitB: 'Rest with the headset on. Nothing to do until the second loop check.',
-  done: 'Recording finished. Checking it now; the result appears here shortly.',
+  done: 'Recording finished. Checking it now; the result will appear in the terminal and on this page.',
   levelDone: 'Level saved. The report is in the terminal.',
 } as const;
 

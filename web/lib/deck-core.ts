@@ -501,7 +501,7 @@ export class DeckCore {
       if (j < this.clickWave.length) click = this.clickWave[j] as number;
       else this.clickStart = -1;
     }
-    // Loop-check clicks keep their own level: the earpiece is off the ear, on the microphone.
+    // Loop-check clicks keep their own level: both earpieces are out, one pressed on the microphone.
     // Demo clicks are heard in the ear, so they follow the narrator's level.
     return this.clickBlock === 'demo' ? (x + click) * this.gain : x * this.gain + click;
   }
