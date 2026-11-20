@@ -147,6 +147,27 @@ describe('smoke report: verdict', () => {
     expect(r.report['questions']['q7_lens_cover']['covered']).toBe(false);
   });
 
+  it('an SDK error from stopAsync() after the end of the recording does not count (the first camera run)', () => {
+    const r = smoke('stop-error', { stopError: { code: 1, afterEndS: 0.02 } });
+    expect(r.verdict).toBe('SMOKE OK');
+    const errors = r.report['hard']['sdk_errors'] as Json;
+    expect(errors).toMatchObject({ ok: true, count: 0, core_count: 0 });
+    expect(errors['errors']).toHaveLength(1);
+    expect(errors['errors'][0]).toMatchObject({ code: 1, name: 'kInvalidState', counted: false, restart: false, after_recording: true });
+    expect(errors['errors'][0]['sources']).toEqual(['samples.jsonl', 'sdk_raw.jsonl.gz']);
+    expect(r.lines).toContain(
+      '   SDK error events: 0; 1 kInvalidState: synthetic stop error came after the end of the recording, while the SDK stopped, and does not count: ok.',
+    );
+    // Nor is it the lens cover's.
+    expect(r.report['questions']['q7_lens_cover']['errors']).toEqual([]);
+  });
+
+  it('the same error inside the recording still fails the run', () => {
+    const r = smoke('inside-error', { sdkError: { code: 1, atS: 60 } });
+    expect(r.verdict).toBe('SMOKE FAIL: 1 SDK error event: 1 kInvalidState: synthetic SDK error');
+    expect(r.report['hard']['sdk_errors']['errors'][0]).toMatchObject({ counted: true, after_recording: false });
+  });
+
   it("one kProcessingFailed before the first packet is tap's restart, not a failure", () => {
     const r = smoke('restart', { sdkError: { code: 8, atS: 2 } });
     expect(r.verdict).toBe('SMOKE OK');

@@ -455,6 +455,23 @@ describe('host recording with the mock tap', () => {
     expect(bytes.readFloatLE(48)).toBe(-0.5); // ch1 Deck output
   });
 
+  it('an SDK error from the stop after the recording ends nothing and is said to not count (the first camera run)', async () => {
+    const { h, w, dir } = await begin({ COPYHOLDER_MOCK_SCRIPT: JSON.stringify({ stopErrorCode: 1 }) });
+    w.send({ t: 'consent', at: 1 });
+    await w.waitMessage((m) => m.t === 'tap' && m.status === 'running');
+    w.block(0);
+    w.send({ t: 'end', reason: 'done' });
+    expect(await h.exited).toBe(0);
+    expect(h.out()).toContain(
+      'The SDK reported error code 1 (kInvalidState). It came while the SDK stopped after the recording, so it does not count against the recording.',
+    );
+    expect(readJsonl(join(dir, 'events.jsonl')).filter((e) => e.e === 'sdk_error')).toEqual([]);
+    const m = readJson(join(dir, 'manifest.json'));
+    expect(m).toMatchObject({ unusable: false, unusable_reasons: [], end: { reason: 'done', by: 'page' } });
+    expect(readJsonl(join(dir, 'samples.jsonl')).some((l) => l.k === 'e' && l.code === 1)).toBe(true);
+    expect(schemaProblems(dir)).toEqual([]);
+  }, 20_000);
+
   it('kills a tap that does not stop within its budget, and records that (spec 7.2)', async () => {
     const { h, w, dir } = await begin({
       COPYHOLDER_TAP_STOP_BUDGET_MS: '800',

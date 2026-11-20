@@ -711,7 +711,11 @@ class Host {
     const action = typeof m.action === 'string' ? m.action : null;
     const call = typeof m.call === 'string' ? m.call.slice(0, 80) : null; // picks the hint for code 3
     this.tapErrorSeen = true;
-    say(sdkErrorText(code, name, { smoke: this.opts.mode === 'smoke', call }));
+    const text = sdkErrorText(code, name, { smoke: this.opts.mode === 'smoke', call });
+    // The SDK's stop after the recording may report an error (the first camera run: kInvalidState from
+    // stopAsync()). It cannot touch the recorded data, and the analysis leaves it out (core/clock sdkErrorCount).
+    const afterRecording = this.phase !== 'recording' && this.tapStopRequested;
+    say(afterRecording ? `${text} It came while the SDK stopped after the recording, so it does not count against the recording.` : text);
     if (isCameraFailure(code, call)) this.hintElectron();
     // tap restarts the SDK once (code 8 before the first packet): the SDK leaves Running and comes
     // back, so the silence watch waits for Running again (onProcessingStatus).

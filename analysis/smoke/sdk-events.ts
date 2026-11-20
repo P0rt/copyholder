@@ -2,7 +2,7 @@
 // samples.jsonl `e` and `s` lines, sdk_raw.jsonl.gz `error` and `processingStatus` lines, and
 // host's `sdk_error` and `tap` events in events.jsonl (spec 7.1, 7.2, 8.1).
 
-import { SAMPLE_RATE_HZ, SDK_RESTART_CODE, sdkErrorCount, type EventLine, type SampleLine } from '../../core/clock/index.ts';
+import { SAMPLE_RATE_HZ, SDK_RESTART_CODE, lastRecordedPacketIndex, sdkErrorCount, type EventLine, type SampleLine } from '../../core/clock/index.ts';
 import { lineSamples, stepAt, type SmokeContext } from './context.ts';
 import { redactLogText } from './numbers.ts';
 import { errorName, processingName } from './reduce-adapter.ts';
@@ -36,6 +36,11 @@ export interface SdkErrorSeen {
   counted: boolean;
   /** tap's one reset and restart: kProcessingFailed before the first packet (spec 7.1). */
   restart: boolean;
+  /**
+   * Logged after the last packet Deck stamped inside the recording (core/clock
+   * lastRecordedPacketIndex): an error of the SDK's stop after the end, which does not count.
+   */
+  afterRecording: boolean;
   origins: ErrorOrigins;
 }
 
@@ -54,7 +59,7 @@ function collectErrors(ctx: SmokeContext): SdkErrorSeen[] {
     atS: n === null ? null : n / ctx.sampleRateHz,
     step: n === null ? null : (stepAt(ctx.steps, n)?.name ?? null),
   });
-  const base = { counted: false, restart: false };
+  const base = { counted: false, restart: false, afterRecording: false };
   ctx.byKind.e.forEach((l, i) => {
     const code = isNum(l.code) ? l.code : null;
     out.push({
@@ -122,6 +127,8 @@ export interface SdkErrorTally {
   counted: SdkErrorSeen[];
   /** tap's one restart, when there was one. */
   restart: SdkErrorSeen | null;
+  /** Errors logged after the recording, while the SDK stopped (they do not count). */
+  afterRecording: SdkErrorSeen[];
   /** core/clock sdkErrorCount over samples.jsonl and events.jsonl (the rule of quickcheck). */
   coreCount: number;
 }
@@ -132,6 +139,9 @@ export interface SdkErrorTally {
  * `sdk_error` events and, as a third record, sdk_raw `error` lines). In each file the first
  * kProcessingFailed before the first packet is tap's reset and restart (spec 7.1) and does not
  * count; the count is the largest of the three, and the errors named are those of that file.
+ * `e` and sdk_raw `error` lines after the last packet Deck stamped inside the recording (at or
+ * before the scenario's `end` mark) do not count either: the SDK sent them while it stopped
+ * (core/clock sdkErrorCount; the first camera run had kInvalidState from stopAsync() there).
  */
 export function sdkErrorTally(ctx: SmokeContext): SdkErrorTally {
   const all = collectErrors(ctx);
@@ -168,25 +178,43 @@ export function sdkErrorTally(ctx: SmokeContext): SdkErrorTally {
       if (restartEvent.size === 0 && early && ev['code'] === SDK_RESTART_CODE) restartEvent.add(k);
     });
 
+  // After the recording: lines with a seq above the last packet Deck stamped inside it.
+  const lastIn = lastRecordedPacketIndex({ stamps: ctx.folder.stamps, samples: ctx.coreSamples });
+  const lastInSeq = lastIn < 0 ? null : (ctx.coreSamples[lastIn]?.seq ?? null);
+  const after = (seq: unknown): boolean => lastInSeq !== null && isNum(seq) && seq > lastInSeq;
+  const afterLine = new Set<number>();
+  ctx.byKind.e.forEach((l, i) => {
+    if (after(l.seq)) afterLine.add(i);
+  });
+  const afterRaw = new Set<number>();
+  ctx.folder.raw
+    .filter((r) => r.kind === 'error')
+    .forEach((r, j) => {
+      if (after(r.seq)) afterRaw.add(j);
+    });
+
   const bySource = {
-    line: { restart: restartLine, total: ctx.byKind.e.length },
-    event: { restart: restartEvent, total: ctx.folder.events.filter((ev) => ev.e === 'sdk_error').length },
-    raw: { restart: restartRaw, total: rIndex },
+    line: { restart: restartLine, after: afterLine, total: ctx.byKind.e.length },
+    event: { restart: restartEvent, after: new Set<number>(), total: ctx.folder.events.filter((ev) => ev.e === 'sdk_error').length },
+    raw: { restart: restartRaw, after: afterRaw, total: rIndex },
   } as const;
   const sources = ['line', 'event', 'raw'] as const;
-  const countOf = (s: (typeof sources)[number]) => bySource[s].total - bySource[s].restart.size;
+  const left = (s: (typeof sources)[number], idx: number) => !bySource[s].restart.has(idx) && !bySource[s].after.has(idx);
+  const countOf = (s: (typeof sources)[number]) => bySource[s].total - bySource[s].restart.size - bySource[s].after.size;
   const count = Math.max(...sources.map(countOf));
   const chosen = sources.find((s) => countOf(s) === count)!;
   for (const e of all) {
     e.restart = sources.some((s) => e.origins[s] !== undefined && bySource[s].restart.has(e.origins[s]!));
+    e.afterRecording = sources.some((s) => e.origins[s] !== undefined && bySource[s].after.has(e.origins[s]!));
     const idx = e.origins[chosen];
-    e.counted = count > 0 && idx !== undefined && !bySource[chosen].restart.has(idx);
+    e.counted = count > 0 && idx !== undefined && left(chosen, idx);
   }
   return {
     count,
     all,
     counted: all.filter((e) => e.counted),
     restart: all.find((e) => e.restart && !e.counted) ?? null,
+    afterRecording: all.filter((e) => e.afterRecording && !e.counted),
     coreCount: sdkErrorEventCount(ctx),
   };
 }

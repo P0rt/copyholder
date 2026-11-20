@@ -7,11 +7,13 @@ import {
   chunkLayout,
   clockCheck,
   clockCheckDetails,
+  endMarkN,
   hardFailures,
   isDeviceEvent,
   isHardEvent,
   isPageHiddenEvent,
   isPageLossEvent,
+  lastRecordedPacketIndex,
   loopClickBlocks,
   onsetBlock,
   sdkErrorCount,
@@ -303,6 +305,24 @@ describe('SDK errors (spec 6.3, 7.1)', () => {
     // Host's event still counts an error inside the recording that no packet follows.
     const ev: EventLine = { n: 70_000, e: 'sdk_error', code: 5, name: 'x', message: '' };
     expect(sdkErrorCount(session({ stamps, samples: [packet(1), packet(3), error(4, 5)], events: [ev] }))).toBe(1);
+  });
+
+  it("stops at the scenario's end mark: an error from stopAsync() after the end does not count, though Deck stamped a packet after it", () => {
+    const end = { n: 55_000, k: 'mark', what: 'step', name: 'end' };
+    const stamps = [...session({}).stamps, { n: 50_000, k: 'arr', seq: 1 }, end, { n: 60_000, k: 'arr', seq: 3 }];
+    // The first camera run: kInvalidState 20 ms after the end, kStopping, then one more stamped packet.
+    const stop = [packet(1), error(2, 1), { seq: 3, k: 's', tArrNs: '1', code: 4 }, packet(4)];
+    const stopStamps = [...stamps, { n: 61_000, k: 'arr', seq: 4 }];
+    expect(endMarkN(stopStamps)).toBe(55_000);
+    expect(lastRecordedPacketIndex(session({ stamps: stopStamps, samples: stop }))).toBe(0);
+    expect(sdkErrorCount(session({ stamps: stopStamps, samples: stop }))).toBe(0);
+    expect(clockCheck(session({ stamps: stopStamps, samples: stop })).hard.sdk_errors).toBe(0);
+    // An error with a packet stamped before the end after it is inside the recording.
+    const inside = [...session({}).stamps, { n: 50_000, k: 'arr', seq: 1 }, { n: 52_000, k: 'arr', seq: 3 }, end, { n: 60_000, k: 'arr', seq: 5 }];
+    expect(sdkErrorCount(session({ stamps: inside, samples: [packet(1), error(2, 5), packet(3), error(4, 1), packet(5)] }))).toBe(1);
+    // Without an end mark (Stop or an abort) the last stamped packet bounds the range, as before.
+    expect(endMarkN(session({}).stamps)).toBeNull();
+    expect(sdkErrorCount(session({ stamps: inside.filter((s) => s !== end), samples: [packet(1), error(2, 5), packet(3), error(4, 1), packet(5)] }))).toBe(2);
   });
 });
 

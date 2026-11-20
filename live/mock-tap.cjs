@@ -22,6 +22,8 @@
 //   restartMs 500                     code 8 before the first packet: kError, Starting after this long, Running again
 //   exitAfterMs, exitCode 1           the process dies at this time (a crash)
 //   stopHangMs                        host's stop takes this long (a slow SDK stop; host may kill the mock)
+//   stopErrorCode                     an SDK error event from stopAsync() when host stops a started run, before
+//                                     kStopping (the first camera run had 1 kInvalidState there)
 //   cameras ["Mock camera (no SDK)"]  the names availableCameras() gives (null: a camera without a name)
 //   cameraName ''                     COPYHOLDER_CAMERA_NAME as tap reads it (a part of a name); '' takes the only camera
 //   camerasAndExit                    the same as cameras ["Mock camera A", "Mock camera B"]: tap lists them and exits
@@ -117,6 +119,7 @@ function normalizeScript(s) {
     idleAfterMs: optMs(o.idleAfterMs),
     errorAtMs: optMs(o.errorAtMs),
     errorCode: Number.isInteger(o.errorCode) ? o.errorCode : 5,
+    stopErrorCode: Number.isInteger(o.stopErrorCode) ? o.stopErrorCode : null,
     errorCall: typeof o.errorCall === 'string' ? o.errorCall : null,
     restartMs: num(o.restartMs, 500, 0, 60_000),
     exitAfterMs: optMs(o.exitAfterMs),
@@ -612,6 +615,13 @@ class MockTap {
     this.stopping = true;
     for (const t of this.timers) clearTimeout(t);
     clearTimeout(this.loopTimer);
+    if (this.started && code === 0 && this.script.stopErrorCode !== null) {
+      // As tap: the SDK's error event during stopAsync(), logged and reported with the table's action.
+      const c = this.script.stopErrorCode;
+      const message = 'mock stop error';
+      this.emit({ seq: this.nextSeq(), k: 'e', tArrNs: this.tArrNs(), code: c, name: errorName(c), message, retryable: false });
+      void this.reportSdkError(c, message, null, errorAction(c, false));
+    }
     if (this.started) {
       this.setProcessing(PROCESSING.stopping);
       this.setProcessing(PROCESSING.idle);

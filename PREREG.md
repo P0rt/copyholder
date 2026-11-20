@@ -88,7 +88,7 @@ Under `both`, a rule that needs one number takes the larger `L_rt` *(assumption)
 2. rule `void` applies;
 3. microphone processing (echo cancellation, noise suppression, automatic gain) is on, or the rate is not 48 000 Hz;
 4. a hard window or device event happened: page hidden, `devicechange`, microphone track `ended` or `mute`;
-5. the median trace rate is under 25 samples per second, or an SDK `error` or `tap_lost` event came;
+5. the median trace rate is under 25 samples per second, or an SDK `error` or `tap_lost` event came before the scenario's end (an `error` the SDK reports while it stops after the end does not count);
 6. in a session, channel 1 is not zeros from `nSilent` to the resume after some live stop;
 7. in a numbers session or the rehearsal, D1 was active for less than half of the reading time.
 
@@ -237,7 +237,7 @@ After a missed cue the participant listens on; outside the cues they stay silent
 2. both loop checks were found, and A and B differ by at most 15 ms;
 3. all 14 dot cues are stamped;
 4. the median rate of the breathing trace is at least 25 samples per second;
-5. there is no SDK `error` event and no `tap_lost` event;
+5. there is no SDK `error` event and no `tap_lost` event before the scenario's end (§4, item 5);
 6. voice was found within 10 s after the cue for at least 12 cues;
 7. in each block of "pa" syllables at least 4 of 5 were found;
 8. at least 4 sniffs were found (§4);

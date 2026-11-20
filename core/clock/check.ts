@@ -163,6 +163,28 @@ export function recordingSampleRateHz(session: SessionData): number {
 /** kProcessingFailed: before the first packet tap answers it with reset() and one restart (spec 7.1). */
 export const SDK_RESTART_CODE = 8;
 
+/** Sample number of the scenario's `end` step mark (the steps ran out), or null when the run did not reach it. */
+export function endMarkN(stamps: readonly Stamp[]): number | null {
+  for (const s of stamps) if (s.k === 'mark' && s.what === 'step' && s.name === 'end') return s.n;
+  return null;
+}
+
+/**
+ * Index in samples.jsonl of the last packet Deck stamped inside the recording: its `arr` stamp
+ * at or before the `end` mark when there is one, else the last stamped packet; -1 without any.
+ */
+export function lastRecordedPacketIndex(session: Pick<SessionData, 'stamps' | 'samples'>): number {
+  const arrivals = arrivalsBySeq(session.stamps);
+  const endN = endMarkN(session.stamps);
+  let last = -1;
+  session.samples.forEach((l, i) => {
+    if (l.k !== 'm' || typeof l.seq !== 'number') return;
+    const nArr = arrivals.get(l.seq);
+    if (nArr !== undefined && (endN === null || nArr <= endN)) last = i;
+  });
+  return last;
+}
+
 /**
  * SDK errors of the recording (spec 6.3): `e` lines of samples.jsonl and host's `sdk_error` events,
  * whichever count is larger (they repeat each other; an exception from start() gives only the event).
@@ -170,17 +192,17 @@ export const SDK_RESTART_CODE = 8;
  * (spec 7.1, live/reduce.cjs errorAction). An event is before the first packet when it has no
  * sample number or one at or before the first `arr` stamp.
  *
- * `e` lines count up to the last packet Deck stamped (`arr`): tap logs every SDK callback, also
- * one during stopAsync() after the recording, when the worker no longer reads tap and host no
- * longer writes events (spec 7.2). An error inside the recording that no packet follows still
- * counts through host's event. Without any stamped packet every `e` line counts.
+ * `e` lines count up to the last packet Deck stamped (`arr`) inside the recording: at or before
+ * the scenario's `end` mark when the run reached it, else the last stamped packet. tap logs every
+ * SDK callback, also those of stopAsync() after the end, when host no longer writes events
+ * (spec 7.2) and the worker may still stamp a packet or two: in the first camera run the SDK
+ * reported kInvalidState from stopAsync() 20 ms after the end, then kStopping and one more
+ * packet. Such an error cannot touch the recorded data, so it does not count. An error inside
+ * the recording that no packet follows still counts through host's event (host also ends the
+ * recording on it). Without any stamped packet every `e` line counts.
  */
 export function sdkErrorCount(session: SessionData, during: (ev: EventLine) => boolean = () => true): number {
-  const arrivals = arrivalsBySeq(session.stamps);
-  let lastStamped = -1;
-  session.samples.forEach((l, i) => {
-    if (l.k === 'm' && typeof l.seq === 'number' && arrivals.has(l.seq)) lastStamped = i;
-  });
+  const lastStamped = lastRecordedPacketIndex(session);
   const linesEnd = lastStamped < 0 ? session.samples.length : lastStamped;
   let packetSeen = false;
   let restartLine = false;

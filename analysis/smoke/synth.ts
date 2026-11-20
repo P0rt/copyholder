@@ -66,6 +66,11 @@ export interface SynthOptions {
   running?: boolean;
   /** One SDK error at a run time in seconds; host aborts the run unless it is tap's restart (code 8 before Running). */
   sdkError?: { code: number; atS: number } | null;
+  /**
+   * One SDK error from stopAsync() this long after the end mark, then kStopping, as in the first
+   * camera run: the worker still stamps the packets of that time, and host writes no event.
+   */
+  stopError?: { code: number; afterEndS: number } | null;
   /** Decoded timestamps as protobufjs Longs (the probe then says Long; tap converts them for the files). */
   longTimestamps?: boolean;
   /** Camera times written into the files as JSON Longs {low, high, unsigned} (a writer that does not convert). */
@@ -209,6 +214,8 @@ export function writeSmokeSession(dir: string, o: SynthOptions = {}): SynthResul
   const restart = err !== null && err.code === 8 && err.atS < tRun;
   if (err !== null && !restart) tEnd = Math.min(tEnd, err.atS + 0.3);
   if (!running) tEnd = START_S + 20;
+  const stopErr = running && err === null ? (o.stopError ?? null) : null;
+  const tFramesEnd = stopErr === null ? tEnd : tEnd + stopErr.afterEndS + 0.1;
   const keptMarks = running ? marks.filter((m) => m.t <= tEnd) : marks.filter((m) => m.name === 'sdk_start');
 
   const deep = [1, 2, 3].map((i) => ({ inS: at(`deep_${i}_in`), outS: at(`deep_${i}_out`), endS: at(`deep_${i}_out`) + 4 }));
@@ -259,6 +266,20 @@ export function writeSmokeSession(dir: string, o: SynthOptions = {}): SynthResul
     }));
   }
 
+  if (stopErr !== null) {
+    const tErr = tEnd + stopErr.afterEndS;
+    add(tErr, (seq, tArr, tWall) => ({
+      sample: mock
+        ? { seq, k: 'e', tArrNs: tArr, code: stopErr.code, name: r.errorName(stopErr.code), message: 'synthetic stop error', retryable: false }
+        : r.errorLine(seq, tArr, stopErr.code, 'synthetic stop error', false),
+      raw: mock ? undefined : r.rawLine(seq, 'error', tArr, tWall, { args: [stopErr.code, 'synthetic stop error', false] }),
+    }));
+    add(tErr + 0.045, (seq, tArr, tWall) => ({
+      sample: mock ? { seq, k: 's', tArrNs: tArr, code: 4, name: r.processingName(4) } : r.processingLine(seq, tArr, 4),
+      raw: mock ? undefined : r.rawLine(seq, 'processingStatus', tArr, tWall, { args: [4] }),
+    }));
+  }
+
   // Frames: frameSentThrough, then the metrics packet.
   const base = baseMesh();
   let state = r.initialState();
@@ -273,7 +294,7 @@ export function writeSmokeSession(dir: string, o: SynthOptions = {}): SynthResul
     k === kAt && stray[stream] !== undefined ? stray[stream]! : ts;
   const firstPacketAt = tRun - 0.05 + (o.firstPacketDelayS ?? 0);
   const frames: { tCap: number; k: number }[] = [];
-  if (running) for (let k = 0; tRun + k / fps < tEnd; k++) frames.push({ tCap: tRun + k / fps, k });
+  if (running) for (let k = 0; tRun + k / fps < tFramesEnd; k++) frames.push({ tCap: tRun + k / fps, k });
   let firstSent: number | null = null;
   for (const { tCap, k } of frames) {
     if (gap && tCap >= gap.from && tCap < gap.to) continue;

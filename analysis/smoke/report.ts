@@ -68,7 +68,10 @@ export function hardConditions(ctx: SmokeContext, paths?: Readonly<Record<Access
   const list = names.length > 3 ? `${names.slice(0, 3).join('; ')}; ...` : names.join('; ');
   if (tally.count > 0) reasons.push(`${tally.count} SDK error event${tally.count > 1 ? 's' : ''}${list ? `: ${list}` : ''}`);
   const restart = tally.restart ? `; tap's one restart (${errorLabel(tally.restart)}, before the first packet) does not count` : '';
-  lines.push(`SDK error events: ${tally.count}${tally.count > 0 && list ? ` (${list})` : ''}${restart}: ${tally.count === 0 ? 'ok' : 'FAIL'}.`);
+  const stopping = tally.afterRecording.length === 0
+    ? ''
+    : `; ${[...new Set(tally.afterRecording.map((e) => errorLabel(e)))].join('; ')} came after the end of the recording, while the SDK stopped, and does not count`;
+  lines.push(`SDK error events: ${tally.count}${tally.count > 0 && list ? ` (${list})` : ''}${restart}${stopping}: ${tally.count === 0 ? 'ok' : 'FAIL'}.`);
 
   return {
     ok: reasons.length === 0,
@@ -90,6 +93,7 @@ export function hardConditions(ctx: SmokeContext, paths?: Readonly<Record<Access
           step: e.step,
           counted: e.counted,
           restart: e.restart,
+          after_recording: e.afterRecording,
         })),
       },
     },

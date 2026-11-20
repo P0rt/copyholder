@@ -85,7 +85,8 @@ export function answerLens(ctx: SmokeContext): Answer {
   const processing = ctx.byKind.s
     .map((l: SampleLine) => ({ name: processingLineName(l), n: lineSamples(ctx, l) }))
     .filter((x): x is { name: string; n: number } => x.name !== null && x.n !== null && x.n >= cover.n && x.n < afterEndN);
-  const errors = sdkErrorsSeen(ctx).filter((e) => e.atS !== null && e.atS * rate >= cover.n && e.atS * rate < afterEndN + 2 * rate);
+  // An error of the SDK's stop after the end of the recording is not the cover's (sdkErrorTally).
+  const errors = sdkErrorsSeen(ctx).filter((e) => !e.afterRecording && e.atS !== null && e.atS * rate >= cover.n && e.atS * rate < afterEndN + 2 * rate);
   const traceCover = windowRate(ctx, 'cover', cover.name, SMOKE_STEPS.lensUncover, cover.n, coverEndN);
   const gap = longestPacketGap(ctx, cover.n, afterEndN);
 

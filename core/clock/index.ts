@@ -90,6 +90,8 @@ export {
   micFlagsOff,
   recordingSampleRateHz,
   sdkErrorCount,
+  endMarkN,
+  lastRecordedPacketIndex,
   measureLoopBlocks,
   stopChecks,
   clockCheck,
