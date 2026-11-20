@@ -166,8 +166,8 @@ interface RecordingOptions {
   manifest?: (m: Manifest) => Manifest;
   /** Lines of events.jsonl; default exampleEvents(). */
   events?: readonly object[];
-  /** Lines of stamps.jsonl; default stampsOf(objectionStep). */
-  stamps?: readonly object[];
+  /** Lines of stamps.jsonl, or its text; default stampsOf(objectionStep). */
+  stamps?: readonly object[] | string;
   /** Lines of detector_in.jsonl; default DETECTOR_IN. */
   detectorIn?: readonly object[];
   /** Lines of samples.jsonl, or its text; default exampleSamples(). */
@@ -189,7 +189,7 @@ function writeRecording(o: RecordingOptions): Recording {
   const hashes: Record<string, string> = {};
   const a = knownAudio();
   put(dir, 'audio.wav', encodeStereoFloatWav(a.ch0, a.ch1), hashes);
-  put(dir, 'stamps.jsonl', toJsonlText(o.stamps ?? stampsOf(o.objectionStep ?? null), 'stamps.jsonl'), hashes);
+  put(dir, 'stamps.jsonl', typeof o.stamps === 'string' ? o.stamps : toJsonlText(o.stamps ?? stampsOf(o.objectionStep ?? null), 'stamps.jsonl'), hashes);
   put(dir, 'samples.jsonl', typeof o.samples === 'string' ? o.samples : toJsonlText(o.samples ?? exampleSamples(), 'samples.jsonl'), hashes);
   put(dir, 'detector_in.jsonl', toJsonlText(o.detectorIn ?? DETECTOR_IN, 'detector_in.jsonl'), hashes);
   put(dir, 'events.jsonl', toJsonlText(o.events ?? exampleEvents(), 'events.jsonl'), hashes);
@@ -232,7 +232,7 @@ interface GateOptions {
   objectionsReached?: boolean;
   manifest?: (m: Manifest) => Manifest;
   events?: readonly object[];
-  stamps?: readonly object[];
+  stamps?: readonly object[] | string;
   detectorIn?: readonly object[];
   samples?: readonly object[] | string;
 }
@@ -1158,7 +1158,7 @@ describe('a gate recording without a verdict', () => {
   });
 });
 
-describe('marks.jsonl and g_resets.json of a gate set (for npm run replay)', () => {
+describe('marks.jsonl, g_resets.json and sniff_onsets.json of a gate set (for npm run replay)', () => {
   /** Every sort of mark between the arr stamps of the packets; the objection block starts at n 1500. */
   function markedStamps(pack: GatePack, arrs: readonly [number, number][]): object[] {
     const s = gateSteps(pack);
@@ -1204,15 +1204,56 @@ describe('marks.jsonl and g_resets.json of a gate set (for npm run replay)', () 
     // The lines are those of stamps.jsonl byte for byte: none is written again.
     const stamps = fs.readFileSync(path.join(g.dir, 'stamps.jsonl'), 'utf8');
     for (const line of lines) expect(stamps.includes(`${line}\n`)).toBe(true);
+    // No sniff step was marked, so stage B finds no sniff onset: sample numbers only, none here.
+    expect(set['sniff_onsets.json']).toBe('{"schema":"sniff-onsets/1","onsets":[]}\n');
     // The pack step holds their hashes, as of every file of the set.
     expect(lastLedgerLine(g.ledgerText()).out_sha256['data/gate-b/marks.jsonl']).toBe(sha256Hex(set['marks.jsonl']!));
     expect(lastLedgerLine(g.ledgerText()).out_sha256['data/gate-b/g_resets.json']).toBe(sha256Hex(set['g_resets.json']!));
+    expect(lastLedgerLine(g.ledgerText()).out_sha256['data/gate-b/sniff_onsets.json']).toBe(sha256Hex(set['sniff_onsets.json']!));
     // pack lists them after stream.jsonl, in SET_ORDER.
     const listed = r.out.slice(r.out.findIndex((l) => l.startsWith('pack: wrote ')) + 1).filter((l) => l.startsWith('  '));
     expect(listed.map((l) => l.trim().split(/\s+/)[0])).toEqual([
-      'manifest.json', 'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json', 'verdict.md',
-      'verdict.json', 'audio_env.json',
+      'manifest.json', 'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json',
+      'verdict.md', 'verdict.json', 'audio_env.json',
     ]);
+  });
+
+  it('writes no sniff_onsets.json when stage B could not lay out the recording, and says why: replay then calls the two values of row 4 not recomputable', async () => {
+    // stampsOf has no step mark of the listening block, so stage B's layout (analysis/gate/view.ts gateLayout) refuses.
+    writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict' });
+    const r = await pack(['gate-b', ...OK]);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain(
+      `note: the set has no sniff_onsets.json: stage B's layout of the recording fails (no "${gateSteps('B').listening}" step mark before the objection block), so npm run replay cannot recount row 4, and best_case_ms and d1_on_sniffs_ms read not recomputable from the set`,
+    );
+    const set = readSet('gate-b');
+    expect(Object.keys(set)).not.toContain('sniff_onsets.json');
+    expect(Object.keys(set)).toContain('verdict.json');
+    expect(validatePublishedFolder(set)).toEqual([]);
+  });
+
+  it('refuses a mark line that is not as Deck writes it: with a key given twice, JSON.parse keeps one value, and the other would be published unchecked', async () => {
+    const s = gateSteps('B');
+    const lines = [
+      ...(stampsOf(s.objections) as object[]).map((x) => JSON.stringify(x)),
+      `{"n":1600,"k":"mark","what":"step","name":"Breathe in, then say ${SECRET}","name":"${s.cueOn[0]!}"}`,
+    ].sort((a, b) => (JSON.parse(a) as { n: number }).n - (JSON.parse(b) as { n: number }).n);
+    const g = writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', stamps: `${lines.join('\n')}\n` });
+    const at = lines.findIndex((l) => l.includes(SECRET)) + 1;
+    const before = g.ledgerText();
+    const r = await pack(['gate-b', ...OK]);
+    expect(r.code).toBe(1);
+    expect(r.err.join('\n')).toContain(
+      `stamps.jsonl line ${at}: a mark line that is not as Deck writes it, JSON.stringify of its fields (a key given twice, a space or an escape differs). Pack copies mark lines unchanged into marks.jsonl, and a key given twice would publish a value that no check reads. Report the recording as broken with this line number; pack publishes no set of it`,
+    );
+    expect(r.out.join('\n')).not.toContain(SECRET);
+    expect(r.err.join('\n')).not.toContain(SECRET);
+    expect(g.ledgerText()).toBe(before);
+    expectNothingWritten('gate-b');
+    // The same mark as Deck writes it is published as it is.
+    expect(marksJsonl(`{"n":1600,"k":"mark","what":"step","name":"${s.cueOn[0]!}"}\n`, null)).toBe(`{"n":1600,"k":"mark","what":"step","name":"${s.cueOn[0]!}"}\n`);
+    expect(() => marksJsonl('{"n":1600, "k":"mark","what":"key"}\n', null)).toThrow('stamps.jsonl line 1: a mark line that is not as Deck writes it');
   });
 
   it('g_resets.json lists the packets gResetSeqs finds on detector_in.jsonl and samples.jsonl, as stage B calls it: a frame with the reset flag and a null g samples.jsonl does not explain, never a packet without a landmark frame', async () => {

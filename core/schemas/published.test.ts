@@ -9,13 +9,13 @@ import {
   buildStreamJsonl, checkPublishedNames, detectorInToStream, findFaceLandmarkFields, findLocalPaths, listDeviceNames,
   parseJsonl, sampleToDetectorIn, streamToDetectorIn, toJsonlText, toPublishedManifest, validateAudioEnv,
   validateDetectorInLine, validateGResets, validateMarkLine, validatePlantedTimes, validatePublishedFolder,
-  validatePublishedManifest, validateSampleLine, validateSentenceEnds, validateStampLine, validateStreamLine, whyNoPublishedSet,
-  whyNotInGit,
+  validatePublishedManifest, validateSampleLine, validateSentenceEnds, validateSniffOnsets, validateStampLine, validateStreamLine,
+  whyNoPublishedSet, whyNotInGit, inexactJsonlLines,
   type DetectorInLine, type Manifest, type SamplePacket, type StampLine, type StreamLine,
 } from './index.ts';
 import {
   EXAMPLE_SEAL, exampleAudioEnv, exampleDetectorIn, exampleEvents, exampleGResets, exampleManifest, exampleMarks,
-  examplePlantedTimes, exampleSamples, exampleSentenceEnds, exampleStamps, exampleStream,
+  examplePlantedTimes, exampleSamples, exampleSentenceEnds, exampleSniffOnsets, exampleStamps, exampleStream,
 } from './examples.ts';
 
 const LANDMARK_REASON = 'not allowed: face landmark coordinates stay in samples.jsonl (spec 8.1, 8.7, 12.3)';
@@ -230,7 +230,7 @@ describe('audio_env.json, sentence_ends.json, planted_times.json (spec 8.7)', ()
   });
 });
 
-describe('marks.jsonl and g_resets.json of a gate set (for npm run replay)', () => {
+describe('marks.jsonl, g_resets.json and sniff_onsets.json of a gate set (for npm run replay)', () => {
   it('marks.jsonl: the "mark" lines of stamps.jsonl, exactly as Deck writes them, which stamps.jsonl accepts too', () => {
     for (const line of exampleMarks()) {
       expect(validateMarkLine(line)).toEqual([]);
@@ -283,6 +283,26 @@ describe('marks.jsonl and g_resets.json of a gate set (for npm run replay)', () 
     expect(validateGResets({ schema: 'g-resets/2', seqs: [1] })).toEqual(['schema: expected "g-resets/1", got "g-resets/2"']);
     expect(validateGResets({ schema: 'g-resets/1', seqs: [1], flagged: 1 })).toEqual(['flagged: unexpected field']);
     expect(validateGResets({ schema: 'g-resets/1' })).toEqual(['seqs: missing']);
+  });
+
+  it('sniff_onsets.json: the sample numbers of the sniffs heard, under its schema, and nothing else', () => {
+    expect(validateSniffOnsets(exampleSniffOnsets())).toEqual([]);
+    expect(validateSniffOnsets({ schema: 'sniff-onsets/1', onsets: [] })).toEqual([]);
+    expect(validateSniffOnsets({ schema: 'sniff-onsets/1', onsets: [2496130, -1, 2640512.5, null] })).toEqual([
+      'onsets[1]: expected a sample number (non-negative integer) >= 0, got -1',
+      'onsets[2]: expected a sample number (non-negative integer), got 2640512.5',
+      'onsets[3]: expected a sample number (non-negative integer), got null',
+    ]);
+    expect(validateSniffOnsets({ schema: 'sniff-onsets/2', onsets: [1] })).toEqual(['schema: expected "sniff-onsets/1", got "sniff-onsets/2"']);
+    expect(validateSniffOnsets({ schema: 'sniff-onsets/1', onsets: [1], steps: ['sniff_1'] })).toEqual(['steps: unexpected field']);
+    expect(validateSniffOnsets({ schema: 'sniff-onsets/1' })).toEqual(['onsets: missing']);
+  });
+
+  it('inexactJsonlLines: a line that is not its value as JSON.stringify writes it, such as a key given twice', () => {
+    const marks = toJsonlText(exampleMarks(), 'marks.jsonl');
+    expect(inexactJsonlLines(marks)).toEqual([]);
+    expect(inexactJsonlLines(`${marks}{"n":1000,"k":"mark","what":"/Users/alice/notes","what":"key"}\n`)).toEqual([7]);
+    expect(inexactJsonlLines('{"n":1000, "k":"mark","what":"key"}\n{"n":1000,"k":"m\\u0061rk","what":"key"}\nnot json\n')).toEqual([1, 2]);
   });
 });
 
@@ -365,10 +385,12 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
     expect(checkPublishedNames(['audio.wav', 'clips/o07.wav', 'texts.json'], { audio: true, clips: true, texts: true })).toEqual([]);
   });
 
-  it('verdict.md, verdict.json, marks.jsonl and g_resets.json belong to the set of the day-1 gate only (spec 8.7)', () => {
-    expect(GATE_ONLY_FILES).toEqual(['verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json']);
+  it('verdict.md, verdict.json, marks.jsonl, g_resets.json and sniff_onsets.json belong to the set of the day-1 gate only (spec 8.7)', () => {
+    expect(GATE_ONLY_FILES).toEqual(['verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json']);
     for (const name of GATE_ONLY_FILES) expect(PUBLISHED_FILES, name).toContain(name);
-    expect(checkPublishedNames(['manifest.json', 'verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json'], { kind: 'gate', pack: 'A' })).toEqual([]);
+    expect(
+      checkPublishedNames(['manifest.json', 'verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json'], { kind: 'gate', pack: 'A' }),
+    ).toEqual([]);
     expect(checkPublishedNames(['manifest.json', 'receipt.json', 'verdict.md', 'verdict.json'], { kind: 'numbers' })).toEqual([
       'verdict.md: only the set of the day-1 gate has it, this record is "numbers" (spec 8.7)',
       'verdict.json: only the set of the day-1 gate has it, this record is "numbers" (spec 8.7)',
@@ -396,10 +418,11 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
   it('a headstart take (a demo take of PREREG section 11) gets a set; live_from and live_sim runs get none', () => {
     expect(whyNoPublishedSet('headstart')).toBeNull();
     expect(checkPublishedNames(['manifest.json', 'stream.jsonl', 'events.jsonl', 'audio_env.json'], { kind: 'headstart' })).toEqual([]);
-    expect(checkPublishedNames(['manifest.json', 'verdict.md', 'marks.jsonl', 'g_resets.json'], { kind: 'headstart' })).toEqual([
+    expect(checkPublishedNames(['manifest.json', 'verdict.md', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json'], { kind: 'headstart' })).toEqual([
       'verdict.md: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
       'marks.jsonl: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
       'g_resets.json: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
+      'sniff_onsets.json: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
     ]);
     for (const kind of ['live_from', 'live_sim'] as const) {
       expect(whyNoPublishedSet(kind)).toBe(
@@ -447,12 +470,13 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
     ]);
   });
 
-  it('validatePublishedFolder checks marks.jsonl and g_resets.json of a gate set line by line', () => {
+  it('validatePublishedFolder checks marks.jsonl, g_resets.json and sniff_onsets.json of a gate set line by line', () => {
     const gate: Manifest = { ...exampleManifest(), kind: 'gate', pack: 'A', plan_commitment: null };
     const ok = {
       'manifest.json': JSON.stringify(gate),
       'marks.jsonl': toJsonlText(exampleMarks(), 'marks.jsonl'),
       'g_resets.json': `${JSON.stringify(exampleGResets())}\n`,
+      'sniff_onsets.json': `${JSON.stringify(exampleSniffOnsets())}\n`,
     };
     expect(validatePublishedFolder(ok)).toEqual([]);
     expect(
@@ -460,12 +484,28 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
         ...ok,
         'marks.jsonl': `${ok['marks.jsonl']}{"n":13200000,"k":"mark","what":"step","name":"Breathe out"}\n{"n":13300000,"k":"mark","what":"key","word":57}\n`,
         'g_resets.json': '{"schema":"g-resets/1","seqs":[5502,5417]}\n',
+        'sniff_onsets.json': '{"schema":"sniff-onsets/1","onsets":[2496130.5]}\n',
       }),
     ).toEqual([
       'marks.jsonl line 7: name: expected a step name of the scenario (lowercase letters, digits and _), got "Breathe out"',
       'marks.jsonl line 8: word: unexpected field',
       'g_resets.json: seqs[1]: expected a packet number above 5502: the seqs rise, each listed once, got 5417',
+      'sniff_onsets.json: onsets[0]: expected a sample number (non-negative integer), got 2496130.5',
     ]);
+  });
+
+  it('validatePublishedFolder refuses a mark line not as Deck writes it: a key given twice hides its first value from every check', () => {
+    const gate: Manifest = { ...exampleManifest(), kind: 'gate', pack: 'A', plan_commitment: null };
+    const marks = toJsonlText(exampleMarks(), 'marks.jsonl');
+    // Parsed, the line is a valid key mark ("what" takes its last value), so only the text shows the path.
+    const twice = '{"n":13150000,"k":"mark","what":"/Users/alice/Documents/notes.txt","what":"key"}';
+    expect(validateMarkLine(JSON.parse(twice))).toEqual([]);
+    const reason = (line: number): string =>
+      `marks.jsonl line ${line}: not as JSON.stringify writes its value (a key given twice, a space or an escape differs), as Deck writes every mark line and pack publishes it unchanged; a key given twice would publish a value that no check reads`;
+    expect(validatePublishedFolder({ 'manifest.json': JSON.stringify(gate), 'marks.jsonl': `${marks}${twice}\n` })).toEqual([reason(7)]);
+    expect(validatePublishedFolder({ 'manifest.json': JSON.stringify(gate), 'marks.jsonl': `{"n":13150000, "k":"mark", "what":"key"}\n${marks}` })).toEqual([reason(1)]);
+    // Other JSONL files of the set are checked as parsed values, as before: stream.jsonl is written anew by pack.
+    expect(validatePublishedFolder({ 'manifest.json': JSON.stringify(gate), 'stream.jsonl': '{"k":"voice", "n":1, "on":true}\n' })).toEqual([]);
   });
 
   it('whyNotInGit: keys, settings, raw SDK data, samples and video stay out of git', () => {

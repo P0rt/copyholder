@@ -94,14 +94,15 @@ export type { SealedPlan, PlanPassage, PlanError, FreezeManifest, FreezePlan, Pl
 
 export {
   validateStreamLine, detectorInToStream, streamToDetectorIn, buildStreamJsonl, findFaceLandmarkFields,
-  validateAudioEnv, validateSentenceEnds, validatePlantedTimes, validateMarkLine, validateGResets, validatePublishedManifest,
-  toPublishedManifest, findLocalPaths, listDeviceNames, checkPublishedNames, validatePublishedFolder, whyNotInGit,
-  whyNoPublishedSet, STREAM_FIELDS, PUBLISHED_FILES, OPT_IN_FILES, NEVER_PUBLISHED, NEVER_IN_GIT, NEVER_IN_GIT_PREFIXES,
-  VIDEO_EXTENSIONS, PRIVATE_TRACK_SETTINGS, PUBLISHED_KINDS, GATE_ONLY_FILES, STEP_NAME_PATTERN, G_RESETS_SCHEMA,
+  validateAudioEnv, validateSentenceEnds, validatePlantedTimes, validateMarkLine, validateGResets, validateSniffOnsets,
+  validatePublishedManifest, toPublishedManifest, findLocalPaths, listDeviceNames, checkPublishedNames, validatePublishedFolder,
+  inexactJsonlLines, inexactLineProblem, whyNotInGit, whyNoPublishedSet, STREAM_FIELDS, PUBLISHED_FILES, OPT_IN_FILES,
+  NEVER_PUBLISHED, NEVER_IN_GIT, NEVER_IN_GIT_PREFIXES, VIDEO_EXTENSIONS, PRIVATE_TRACK_SETTINGS, PUBLISHED_KINDS, GATE_ONLY_FILES,
+  STEP_NAME_PATTERN, G_RESETS_SCHEMA, SNIFF_ONSETS_SCHEMA,
 } from './published.ts';
 export type {
   StreamLine, StreamBatch, StreamVal, StreamBuild, StreamText, AudioEnv, SentenceEnds, PlantedTimes, MarkLine, GResetsFile,
-  DeviceName, PublishOptions,
+  SniffOnsetsFile, DeviceName, PublishOptions,
 } from './published.ts';
 
 export {

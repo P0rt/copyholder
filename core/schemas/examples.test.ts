@@ -30,6 +30,7 @@ const JSON_EXAMPLES: Readonly<Record<string, () => object>> = {
   'sentence_ends.json': ex.exampleSentenceEnds,
   'planted_times.json': ex.examplePlantedTimes,
   'g_resets.json': ex.exampleGResets,
+  'sniff_onsets.json': ex.exampleSniffOnsets,
 };
 
 /** File name -> example lines. */

@@ -18,19 +18,22 @@ Exit codes:
 
 | Code | When |
 |---|---|
-| 0 | verified: the verdict and the five row outcomes of every set are recomputed and match without a condition, and no recomputed value differs |
+| 0 | verified: the verdict and the five row outcomes of every set are recomputed and match without a condition, and no recomputed value differs; the last line names any other value a set leaves not recomputable, which stays unchecked |
 | 1 | a recomputed value differs from the set, or a set or an output is refused |
 | 2 | usage: an unknown option, an option without its value, the same set named twice, or a path inside `gate/` or `sample/` |
 | 3 | no recomputed value differs, but the verdict or a row outcome of a set is not recomputable from it (a set without `verdict.json` has none), or matches only under a condition the set does not show |
 
-Pack writes `marks.jsonl` and `g_resets.json` into every gate set (see below), so a set as pack
-writes it is verified (exit 0) when stage B's verdict follows from it. A set without `marks.jsonl`,
-as an earlier pack wrote it, ends with exit 3: its verdict needs the cue and step marks. So does
-the set of a recording that never reached its verdict: it has no `verdict.json` to recompute.
+Pack writes `marks.jsonl` and `g_resets.json` into every gate set, and `sniff_onsets.json` into
+one with its verdict (see below), so a set as pack writes it is verified (exit 0) when stage B's
+verdict follows from it, with every value of `verdict.json` checked. A set without
+`sniff_onsets.json` is verified as well, but `best_case_ms` and `d1_on_sniffs_ms` of row 4 stay
+unchecked, and the last line names them. A set without `marks.jsonl`, as an earlier pack wrote it,
+ends with exit 3: its verdict needs the cue and step marks. So does the set of a recording that
+never reached its verdict: it has no `verdict.json` to recompute.
 
 ## What it reads
 
-Nine files of the set, each checked with its validator from `core/schemas`. Replay reads the
+Ten files of the set, each checked with its validator from `core/schemas`. Replay reads the
 files of the set folder only: a file that leads out of it through a link is refused. It never
 reads or writes inside `gate/` or `sample/`: a set folder, `--params`, `--json`, `--svg` and
 `--png` there are a usage error.
@@ -46,6 +49,7 @@ reads or writes inside `gate/` or `sample/`: a set folder, `--params`, `--json`,
 | `verdict.md` | checked against the text stage B writes from `verdict.json` (`analysis/gate/verdict-text.ts`) |
 | `marks.jsonl` | the cue and step marks: the `"mark"` lines of `stamps.jsonl`; a set without it still replays (see below) |
 | `g_resets.json` | the packets stage B read as reset frames of G; a set without it still replays (see "Readings") |
+| `sniff_onsets.json` | the sample numbers of the sniffs stage B heard in `audio.wav` channel 0, from which replay recounts row 4; a set without it still replays (see below) |
 
 A set with `verdict.json` but without `verdict.md`, `stream.jsonl` or `onsets.json` is refused as
 not whole, and so is a set with `verdict.md` but without `verdict.json`.
@@ -87,7 +91,8 @@ value, the value in the set and a status:
 | `not recomputable from the set: <why>` | the value needs a file the set does not hold; the reason names it. Never skipped, never a difference |
 | `an input of the replay: <why>` | replay takes the value from the set to find what stage B scored with, so it is no result: `params_sha256` always, and `tuning` when replay rebuilt the params with it |
 
-A line per set counts the statuses, and the last line gives the outcome of the exit code.
+A line per set counts the statuses, and the last line gives the outcome of the exit code; on exit 0
+it names every value a set leaves not recomputable.
 
 ## What it recomputes
 
@@ -109,7 +114,10 @@ A line per set counts the statuses, and the last line gives the outcome of the e
 - `rows.hits`, `rows.lead`, `rows.false_holds` (with the in-sample rates of the listening
   block), `rows.chest_vs_lips` and their outcomes;
 - `rows.sniff_lag`: `n`, `no_arrival`, the medians and their bound as `calib.json` holds them,
-  and the outcome;
+  and the outcome; with `sniff_onsets.json` replay recounts the sniff lag as stage B does
+  (`analysis/replay/sniffs.ts` `sniffRecountFrom`), which gives `best_case_ms`,
+  `d1_on_sniffs_ms`, the grade on the unrounded medians, and every number of the row when
+  `calib.json` has no sniff block;
 - `misses`, `other`, `manual_changes` and `verdict`.
 
 Three more lines check other files of the set: `labels_sha256` of `onsets.json` against its
@@ -124,9 +132,9 @@ text stage B writes from `verdict.json`; a note quotes the first line that diffe
 | everything that depends on the cues or the blocks: `events`, the five row outcomes, rows 1, 2, 3 and 5, `misses`, `other`, `manual_changes`, `verdict`; with them stage A's `tuning` and the in-sample rates | the cue and step marks: lines `{"k":"mark","what":"cue"}` and `{"k":"mark","what":"step"}` of `stamps.jsonl` (`analysis/gate/view.ts` `gateLayout`, `scoredCues`) | `stamps.jsonl` is never published (spec 8.7); `stream.jsonl` keeps only the `nArr` of its `arr` lines, and `events.jsonl` holds no marks. `marks.jsonl` carries them |
 | every value that needs the cues, when `marks.jsonl` has no step mark after the cues | the end of the scored block, which stage B then takes from the last stamp of `stamps.jsonl` or its last audio chunk (`gateLayout`) | `stamps.jsonl` is never published |
 | values of G (row 5, `in_sample_lips_per_min`, `manual_changes`, `verdict`) when `stream.jsonl` has packets with `g` null and the readings give them differently | `lm` of each `"m"` line of `samples.jsonl` (`analysis/rivals` `gResetSeqs`): a reset frame restarts G's baseline, a packet without a landmark frame does not | `samples.jsonl` is never published. `g_resets.json` carries the answer |
-| `rows.sniff_lag.best_case_ms`, `rows.sniff_lag.d1_on_sniffs_ms` | the sniff onsets stage B finds in `audio.wav` channel 0 after the `sniff_<i>` step marks, placed by the chunk stamps of `stamps.jsonl` (`analysis/clocks/compute.ts` `recountSniffLag`) | `stamps.jsonl` is never published, and replay reads no audio |
-| all of row 4 when `calib.json` has no `sniff_lag_ms` | the same recount, with the arrivals of `samples.jsonl` | as above; `samples.jsonl` is never published |
-| the grade of row 4 (and `verdict`) when a median of `calib.json` is 150.0 (hi) or 350.0 (lo) | the unrounded medians of the recount | `calib.json` holds them to 0.1 ms |
+| `rows.sniff_lag.best_case_ms`, `rows.sniff_lag.d1_on_sniffs_ms`, when the set has no `sniff_onsets.json` | the sniff onsets stage B finds in `audio.wav` channel 0 after the `sniff_<i>` step marks (`analysis/clocks/compute.ts` `recountSniffLag`) | replay reads no audio, and `audio.wav` is published only with `pack --with-audio`. `sniff_onsets.json` carries the onsets |
+| all of row 4 when `calib.json` has no `sniff_lag_ms` and the set has no `sniff_onsets.json` | the same recount | as above |
+| the grade of row 4 (and `verdict`) when a median of `calib.json` is 150.0 (hi) or 350.0 (lo) and the set has no `sniff_onsets.json` | the unrounded medians of the recount | `calib.json` holds them to 0.1 ms |
 | `other`, when `verdict.json` has none and replay computes one | whether stage B ran with `--no-other` (spec 14.4) | the set does not say |
 
 ## Readings
@@ -138,8 +146,9 @@ compares the set with each:
   Without `g_resets.json`, replay scores two readings: every packet with `g` null a reset frame,
   and none. With one such packet these are the only cases; with more, a mix of them is not scored
   (assumption: a value both extremes give alike is the one stage B found).
-- Row 4: at a threshold, the grade of the medians before rounding on both sides of it; without a
-  sniff block, every grade.
+- Row 4, for a set without `sniff_onsets.json`: at a threshold, the grade of the medians before
+  rounding on both sides of it; without a sniff block, every grade. With the file replay grades
+  row 4 as stage B does.
 
 A value every reading gives alike is checked as any other. Values the readings give differently
 must all come from one reading at once: then each reads `MATCH if <that reading>`, which is not
@@ -147,19 +156,24 @@ verified (exit 3). When no one reading gives them all, they read `DIFFERS` if th
 every case (one packet with `g` null, or row 4 alone), and otherwise "not recomputable from the
 set", since a mix of the readings could give them.
 
-## marks.jsonl and g_resets.json
+## marks.jsonl, g_resets.json and sniff_onsets.json
 
-Pack writes both into every gate set (`analysis/pack.ts` `marksJsonl` and `gResetsJson`), and
-`core/schemas` lists them in `PUBLISHED_FILES` with their validators, `validateMarkLine` and
-`validateGResets`, as files of the gate set only; a headstart set gets neither. A set an earlier
-pack wrote has neither: replay still reads it, and every value that needs them is not
-recomputable from it or is scored under both readings of G.
+Pack writes the first two into every gate set and `sniff_onsets.json` into one with its verdict
+(`analysis/pack.ts` `marksJsonl`, `gResetsJson` and `sniffOnsetsJson`), and `core/schemas` lists
+them in `PUBLISHED_FILES` with their validators, `validateMarkLine`, `validateGResets` and
+`validateSniffOnsets`, as files of the gate set only; a headstart set gets none of them. A set an
+earlier pack wrote may lack them: replay still reads it, and every value that needs them is not
+recomputable from it or is scored under each reading.
 
 - `marks.jsonl` holds the `"mark"` lines of `stamps.jsonl` as they are, in file order: step names,
   cue numbers and sample numbers, no text and no times of words. Its validator takes exactly the
   three lines Deck writes: a step mark with `n`, `k`, `what` and `name`, a cue mark with `n`, `k`,
   `i`, `what` and `on`, and a key mark with `n`, `k` and `what`, each with no other field, and
-  step names of lowercase letters, digits and `_`, so no text can ride along. Where pack holds
+  step names of lowercase letters, digits and `_`, so no text can ride along. Each line must be
+  as `JSON.stringify` writes its fields, as Deck writes it: with a key given twice `JSON.parse`
+  keeps one value, and the other would be published without any check reading it, so pack
+  refuses a recording with such a mark line, and `validatePublishedFolder` and replay refuse such
+  a line in `marks.jsonl` (`core/schemas` `inexactJsonlLines`). Where pack holds
   part B back, the file holds the marks before the step mark of the objection block, the ones
   stage A reads. Replay refuses a line the validator refuses, and marks that do not fit
   `onsets.json`: cue numbers that do not rise in time order, a reply whose cue has no mark, a reply
@@ -171,9 +185,21 @@ recomputable from it or is scored under both readings of G.
   `samples.jsonl` flags a reset frame on a packet with a `g` value, and leaves the file out, with a
   note, when `samples.jsonl` has a broken line that is not a last line a crash cut short. Replay
   refuses a seq that is no packet of `stream.jsonl` with `g` null.
+- `sniff_onsets.json` is `{"schema":"sniff-onsets/1","onsets":[...]}`: the sample number of the
+  onset of each sniff stage B heard in `audio.wav` channel 0, in prompt order. Pack finds them as
+  stage B does: it loads the recording as stage B loads it, lays it out with
+  `analysis/gate/view.ts` `gateLayout` and runs `recountSniffLag` with the L_rt block and the trace
+  sign of `calib.json`. It writes the file only when the recount from the set gives what
+  `recountSniffLag` gives on the recording; otherwise, or when stage B's layout of the recording
+  fails, it leaves the file out with a note. Replay recounts from the set as stage B recounts from
+  the recording (`analysis/replay/sniffs.ts`): A_ref from the trace that arrived during the
+  listening step, whose span the step marks of `marks.jsonl` give, the packets and arrivals of
+  `stream.jsonl`, and L_rt and the trace sign of `calib.json`. It refuses onsets that do not each
+  lie within 2 s after the mark of a sniff step of their own, in prompt order, since stage B
+  searches each sniff there.
 
-Beyond those checks both are trusted as published, like `stream.jsonl`: nothing else in the set
-ties them to the recording.
+Beyond those checks all three are trusted as published, like `stream.jsonl`: nothing else in the
+set ties them to the recording.
 
 ## Table and figure
 
@@ -210,19 +236,30 @@ to look as host leaves a real one (the real tap and its SDK in `manifest.json`, 
 file hashed by the record step of `ledger.jsonl`), scored by stages A and B, packed by `npm run
 pack`, and replayed from `data/<id>/` alone. It shows that pack A, whose row 5 turns on which
 packets with `g` null were reset frames, and pack B, scored with the params the retune froze under
-`gate-retune`, are verified (exit 0), and pack A is not without its `g_resets.json` (exit 3); that
-one changed number of `verdict.json` exits 1; that the set of a pack A held back at the objection
-block exits 3 with no value differing; and that `--json`, `--svg` and `--png` write the table and
-the figure of two packed sets.
+`gate-retune`, with five sniffs whose best case and D1 on sniffs replay recounts from
+`sniff_onsets.json`, are verified (exit 0), and pack A is not without its `g_resets.json` (exit 3);
+that one changed number of `verdict.json` exits 1, `best_case_ms` and `d1_on_sniffs_ms` among
+them; that without `sniff_onsets.json` those two stay unchecked and the last line names them
+(exit 0), and that a `sniff_onsets.json` whose onsets do not fit the sniff step marks, or that is
+not valid, is refused; that the set of a pack A held back at the objection block exits 3 with no
+value differing, and so does the set of a pack B without a verdict whose `onsets.json` holds no
+event and no labels hash; and that `--json`, `--svg` and `--png` write the table and the figure of
+two packed sets.
 
 `analysis/replay/replay.test.ts` scores synthetic recordings (`analysis/gate/synth.ts`) with
 stages A and B as `analysis/gate.test.ts` does and publishes them as pack does: `stream.jsonl`
 from `detector_in.jsonl` and `stamps.jsonl`, the other files copied, the unpublished ones left
-out, with or without `marks.jsonl` and `g_resets.json`. On those sets it shows that:
+out, with or without `marks.jsonl`, `g_resets.json` and `sniff_onsets.json`. On those sets it
+shows that:
 
-- with `marks.jsonl`, every value matches but the two recounts of row 4, stage A's tuning
-  included, `params_sha256` reads as an input, and replay exits 0, also for a recording whose
-  params stage A of the next recording overwrote;
+- with `marks.jsonl` and without `sniff_onsets.json`, every value matches but the two recounts of
+  row 4, stage A's tuning included, `params_sha256` reads as an input, and replay exits 0 with a
+  last line that names the two, also for a recording whose params stage A of the next recording
+  overwrote;
+- with `sniff_onsets.json`, on a recording with five sniffs and no sniff block in `calib.json`,
+  every number of row 4 is recounted and the verdict is verified (exit 0); without the file row 4
+  is not recomputable (exit 3), and a `sniff_onsets.json` without one of its onsets recounts
+  values that differ (exit 1);
 - without `marks.jsonl` replay exits 3, also when `verdict.json` was changed, `tuning` is an
   input when replay rebuilt the params with it, and `--json` and `--svg` are refused;
 - a set without `verdict.json` and `verdict.md` has its files checked, nothing differs, and replay
@@ -236,7 +273,8 @@ out, with or without `marks.jsonl` and `g_resets.json`. On those sets it shows t
   under `gate-retune` and rebuilt without the tags;
 - an empty `stream.jsonl`, a set with `verdict.md` but without `verdict.json`, a set with
   `verdict.json` but without `verdict.md` or `onsets.json`, a folder that does not exist, a
-  `marks.jsonl` with a line that is not a mark or marks of another recording, a file that leads
+  `marks.jsonl` with a line that is not a mark, a mark line with a key given twice or marks of
+  another recording, a file that leads
   out of the set folder and a `g_resets.json` that names a packet with `g` set are each refused
   with the file named, and the other sets are still replayed;
 - with one packet with `g` null, the counts of row 5 the readings give differently match under

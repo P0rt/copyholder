@@ -10,7 +10,8 @@
 // PW_CHROMIUM_PATH names the Chrome that draws the PNG). Nothing is read or written inside gate/
 // or sample/. See analysis/replay/README.md.
 // Exit codes: 0 verified: the verdict and the five row outcomes of every set are recomputed and
-// match without a condition, and no recomputed value differs; 1 a value differs, or a set or an
+// match without a condition, and no recomputed value differs (the last line then names every other
+// value a set leaves not recomputable, which stays unchecked); 1 a value differs, or a set or an
 // output is refused; 2 usage; 3 nothing differs, but the verdict or a row outcome of a set is not
 // recomputable from it (a set without verdict.json has none), or matches only under a condition
 // the set does not show.
@@ -125,6 +126,14 @@ function unverifiedOf(r: AnyReplay): string[] {
   return r.checks.filter((c) => KEY_VALUES.includes(c.name) && !verifies(c)).map((c) => (c.name === 'verdict' ? 'verdict' : c.name.replace(/^rows\.(\w+)\.outcome$/, 'row $1')));
 }
 
+/**
+ * The other values of a set that a verified verdict leaves unchecked: those not recomputable from
+ * it, such as best_case_ms and d1_on_sniffs_ms of a set without sniff_onsets.json.
+ */
+function uncheckedOf(r: AnyReplay): string[] {
+  return r.checks.filter((c) => !KEY_VALUES.includes(c.name) && c.status === 'NOT_RECOMPUTABLE').map((c) => c.name);
+}
+
 /** The outputs that need every set scored: refused with what is missing, or written. */
 async function writeOutputs(args: ReplayArgs, replays: readonly AnyReplay[], deps: ReplayDeps): Promise<boolean> {
   const wanted = [args.json && '--json', args.svg && '--svg', args.png && '--png'].filter((x): x is string => typeof x === 'string');
@@ -218,13 +227,22 @@ export async function main(argv: readonly string[], deps: ReplayDeps = defaultRe
   if (unverified.length > 0) {
     deps.log(
       `replay: no recomputed value differs, but the verdict is not verified: ${unverified.map(([r, names]) => `${r.set.name} ${names.join(', ')}`).join('; ')} ${
-        unverified.length === 1 && unverified[0]![1].length === 1 ? 'is' : 'are'
-      } not recomputable from the set or match only under a condition it does not show (see above; ${counted})`,
+        unverified.length === 1 && unverified[0]![1].length === 1 ? 'is not recomputable from the set or matches' : 'are not recomputable from the set or match'
+      } only under a condition it does not show (see above; ${counted})`,
     );
     return 3;
   }
+  const verified = `replay: verified: the verdict and the five row outcomes of ${replays.length === 1 ? 'the set are' : `all ${replays.length} sets are`} recomputed and match, and no recomputed value differs`;
+  const unchecked = replays.map((r) => [r, uncheckedOf(r)] as const).filter(([, names]) => names.length > 0);
+  if (unchecked.length === 0) {
+    deps.log(`${verified} (${counted})`);
+    return 0;
+  }
+  const one = unchecked.length === 1 && unchecked[0]![1].length === 1;
   deps.log(
-    `replay: verified: the verdict and the five row outcomes of ${replays.length === 1 ? 'the set are' : `all ${replays.length} sets are`} recomputed and match, and no recomputed value differs (${counted})`,
+    `${verified}, but ${one ? 'this value is' : 'these values are'} not recomputable from ${unchecked.length === 1 ? 'the set' : 'their sets'} and ${one ? 'stays' : 'stay'} unchecked: ${unchecked
+      .map(([r, names]) => `${r.set.name} ${names.join(', ')}`)
+      .join('; ')} (see above; ${counted})`,
   );
   return 0;
 }

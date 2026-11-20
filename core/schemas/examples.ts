@@ -8,7 +8,7 @@ import type { FrozenParams, ScoringRules } from './params.ts';
 import type { FreezeManifest, PlanError, SealedPlan, Texts, Timings } from './plan.ts';
 import type { Receipt } from './receipt.ts';
 import type { Results } from './results.ts';
-import type { AudioEnv, GResetsFile, MarkLine, PlantedTimes, SentenceEnds, StreamLine } from './published.ts';
+import type { AudioEnv, GResetsFile, MarkLine, PlantedTimes, SentenceEnds, SniffOnsetsFile, StreamLine } from './published.ts';
 import type { LedgerLine } from './ledger.ts';
 
 /** The seal of the spec 8.3 screen example. */
@@ -530,6 +530,11 @@ export function exampleMarks(): MarkLine[] {
 /** g_resets.json of a gate set: the packets stage B read as reset frames of G. */
 export function exampleGResets(): GResetsFile {
   return { schema: 'g-resets/1', seqs: [5417, 5502] };
+}
+
+/** sniff_onsets.json of a gate set: the sniffs stage B heard in audio.wav channel 0, the third one missed. */
+export function exampleSniffOnsets(): SniffOnsetsFile {
+  return { schema: 'sniff-onsets/1', onsets: [2496130, 2640512, 2928207, 3072455] };
 }
 
 /** timings.json of a short clip, as tools/tts writes it (spec 7.7, 8.2). */

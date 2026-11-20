@@ -1,7 +1,7 @@
 // Published set data/<id>/ (spec 8.7, 12.4): stream.jsonl and its converter from
-// detector_in.jsonl, audio_env.json, sentence_ends.json, planted_times.json, marks.jsonl and
-// g_resets.json of a gate set, the public manifest.json, and the lists of what may be published
-// or committed (spec 13.4 "Чистота").
+// detector_in.jsonl, audio_env.json, sentence_ends.json, planted_times.json, marks.jsonl,
+// g_resets.json and sniff_onsets.json of a gate set, the public manifest.json, and the lists of
+// what may be published or committed (spec 13.4 "Чистота").
 
 import {
   arrayOf, bool, byKind, describe, fail, int, isPlainObject, lit, makeValidator, nullable, num, obj, oneOf, str,
@@ -10,7 +10,7 @@ import {
 import {
   GATE_PACKS, NARRATOR_STATES, RECORD_KINDS, sampleN, type GatePack, type RecordKind, type TimedFlag, type TimedValue,
 } from './common.ts';
-import { parseJson, parseJsonl, splitTruncatedTail, toJsonlText, type JsonlRows } from './jsonl.ts';
+import { parseJson, parseJsonl, splitJsonlLines, splitTruncatedTail, toJsonlText, type JsonlRows } from './jsonl.ts';
 import {
   LANDMARK_FIELDS, talkPairs, tracePairs, validateDetectorInLine, validateEventLine, validateManifest,
   validateStampLine, type DetState, type DetVoice, type DetectorInLine, type Manifest, type StampLine,
@@ -270,11 +270,12 @@ export const validatePlantedTimes: Validator<PlantedTimes> = makeValidator(
   }),
 );
 
-// ---- marks.jsonl, g_resets.json (gate sets) -------------------------------------------------
-// Stage B takes two things from files that are never published: the cue and step marks of its
-// layout from the "mark" lines of stamps.jsonl (analysis/gate/view.ts), and which packets with g
-// null are reset frames of G from lm of samples.jsonl (analysis/rivals/g.ts gResetSeqs). pack
-// publishes both with a gate set so that npm run replay can recompute the verdict from the set
+// ---- marks.jsonl, g_resets.json, sniff_onsets.json (gate sets) ------------------------------
+// Stage B takes three things from files that are never published: the cue and step marks of its
+// layout from the "mark" lines of stamps.jsonl (analysis/gate/view.ts), which packets with g null
+// are reset frames of G from lm of samples.jsonl (analysis/rivals/g.ts gResetSeqs), and the sniff
+// onsets of row 4 from audio.wav channel 0 (analysis/clocks/compute.ts recountSniffLag). pack
+// publishes them with a gate set so that npm run replay can recompute the verdict from the set
 // alone (analysis/replay/README.md); spec 8.7 does not list them (assumption).
 
 /** Step names of the scenarios (web/scenarios): lowercase letters, digits and "_", so no prompt or pack text passes as one. */
@@ -330,6 +331,22 @@ export const validateGResets: Validator<GResetsFile> = makeValidator(
       }
     },
   }),
+);
+
+export const SNIFF_ONSETS_SCHEMA = 'sniff-onsets/1';
+
+/**
+ * The sniff onsets of row 4 (spec 6.3, PREREG §4): n_sniff of every sniff stage B heard in
+ * audio.wav channel 0 after its 'Sniff' prompt, in prompt order (analysis/clocks/compute.ts
+ * recountSniffLag). Sample numbers only.
+ */
+export interface SniffOnsetsFile {
+  schema: typeof SNIFF_ONSETS_SCHEMA;
+  onsets: number[];
+}
+
+export const validateSniffOnsets: Validator<SniffOnsetsFile> = makeValidator(
+  obj({ required: { schema: lit(SNIFF_ONSETS_SCHEMA), onsets: arrayOf(sampleN) } }),
 );
 
 // ---- public manifest.json ------------------------------------------------------------
@@ -440,11 +457,11 @@ export function listDeviceNames(m: Manifest): DeviceName[] {
 
 // ---- what may be published and committed ----------------------------------------------
 
-/** Files of data/<id>/ (spec 8.7, and marks.jsonl and g_resets.json for npm run replay). Not every record has every file. */
+/** Files of data/<id>/ (spec 8.7, and marks.jsonl, g_resets.json and sniff_onsets.json for npm run replay). Not every record has every file. */
 export const PUBLISHED_FILES = [
   'manifest.json', 'stream.jsonl', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json',
   'receipt.json', 'receipt.txt', 'verdict.md', 'verdict.json', 'sentence_ends.json', 'planted_times.json',
-  'audio_env.json', 'plan.json', 'marks.jsonl', 'g_resets.json',
+  'audio_env.json', 'plan.json', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json',
 ] as const;
 
 /** Published only with a switch, one session at a time (spec 8.7). */
@@ -499,10 +516,11 @@ export function whyNotInGit(path: string): string | null {
 export const PUBLISHED_KINDS: readonly RecordKind[] = ['gate', 'numbers', 'spacebar', 'demo', 'headstart'];
 
 /**
- * Files only the set of the day-1 gate has: its verdict (spec 8.7), and the marks and the reset
- * frames of G that npm run replay recomputes the verdict with (see marks.jsonl, g_resets.json above).
+ * Files only the set of the day-1 gate has: its verdict (spec 8.7), and the marks, the reset
+ * frames of G and the sniff onsets that npm run replay recomputes the verdict with (see
+ * marks.jsonl, g_resets.json, sniff_onsets.json above).
  */
-export const GATE_ONLY_FILES = ['verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json'] as const;
+export const GATE_ONLY_FILES = ['verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json'] as const;
 
 /** Why a record gets no published set, or null when it gets one (spec 8.7). */
 export function whyNoPublishedSet(kind: RecordKind, pack?: GatePack | null): string | null {
@@ -557,7 +575,13 @@ export function checkPublishedNames(names: readonly string[], opts: PublishOptio
   return problems;
 }
 
-const PUBLISHED_VALIDATORS: Readonly<Record<string, { jsonl: boolean; validate: Validator<unknown> }>> = {
+/**
+ * How each text file of data/<id>/ is checked. `exact`: every line must be its value as
+ * JSON.stringify writes it, the one way Deck writes a mark line of stamps.jsonl, which pack copies
+ * unchanged. Validators see parsed values only, and a key given twice parses to its last value:
+ * the first one, which the file still holds, no check would read.
+ */
+const PUBLISHED_VALIDATORS: Readonly<Record<string, { jsonl: boolean; validate: Validator<unknown>; exact?: boolean }>> = {
   'manifest.json': { jsonl: false, validate: validatePublishedManifest },
   'stream.jsonl': { jsonl: true, validate: validateStreamLine },
   'events.jsonl': { jsonl: true, validate: validateEventLine },
@@ -571,9 +595,34 @@ const PUBLISHED_VALIDATORS: Readonly<Record<string, { jsonl: boolean; validate: 
   'audio_env.json': { jsonl: false, validate: validateAudioEnv },
   'plan.json': { jsonl: false, validate: validateSealedPlan },
   'texts.json': { jsonl: false, validate: validateTexts },
-  'marks.jsonl': { jsonl: true, validate: validateMarkLine },
+  'marks.jsonl': { jsonl: true, validate: validateMarkLine, exact: true },
   'g_resets.json': { jsonl: false, validate: validateGResets },
+  'sniff_onsets.json': { jsonl: false, validate: validateSniffOnsets },
 };
+
+/**
+ * Lines of a JSONL text that are not their value as JSON.stringify writes it (a key given twice,
+ * a space, an escape that is not needed), with their 1-based numbers; lines that are no JSON are
+ * left to the parse, which names them.
+ */
+export function inexactJsonlLines(text: string): number[] {
+  const out: number[] = [];
+  splitJsonlLines(text).forEach((line, i) => {
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (JSON.stringify(value) !== line) out.push(i + 1);
+  });
+  return out;
+}
+
+/** The problem of a line of `file` that inexactJsonlLines finds. */
+export function inexactLineProblem(file: string, line: number): string {
+  return `${file} line ${line}: not as JSON.stringify writes its value (a key given twice, a space or an escape differs), as Deck writes every mark line and pack publishes it unchanged; a key given twice would publish a value that no check reads`;
+}
 
 /** Kind and gate pack named by a manifest.json text; undefined where it does not parse or name one. */
 function manifestKindAndPack(text: string | null | undefined): { kind?: RecordKind; pack?: GatePack | null } {
@@ -615,6 +664,7 @@ export function validatePublishedFolder(
       parsed.rows.forEach((row, i) => {
         for (const f of findFaceLandmarkFields(row)) problems.push(`${name} line ${parsed.lineNumbers[i] ?? i + 1}: ${f}: face landmark field (spec 8.7)`);
       });
+      if (v.exact === true) for (const line of inexactJsonlLines(text)) problems.push(inexactLineProblem(name, line));
     } else {
       const parsed = parseJson(text, v.validate, { file: name });
       problems.push(...parsed.errors);

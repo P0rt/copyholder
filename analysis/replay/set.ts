@@ -1,18 +1,21 @@
-// A published gate set data/<id>/ as replay reads it (spec 8.7, 12.4). Replay reads nine of its
+// A published gate set data/<id>/ as replay reads it (spec 8.7, 12.4). Replay reads ten of its
 // files, each checked with its own validator from core/schemas: manifest.json (the public copy),
-// stream.jsonl, marks.jsonl, g_resets.json, onsets.json, calib.json, clock_report.json,
-// verdict.json, and verdict.md, which recompute.ts checks against the text stage B writes from
-// verdict.json. It reads nothing else: stage B scores neither events.jsonl nor audio_env.json.
+// stream.jsonl, marks.jsonl, g_resets.json, sniff_onsets.json, onsets.json, calib.json,
+// clock_report.json, verdict.json, and verdict.md, which recompute.ts checks against the text
+// stage B writes from verdict.json. It reads nothing else: stage B scores neither events.jsonl nor
+// audio_env.json.
 //
-// Two things stage B reads come from files that are never published (spec 8.7): the cues and the
+// Three things stage B reads come from files that are never published (spec 8.7): the cues and the
 // step marks of its layout, from the "mark" lines of stamps.jsonl (analysis/gate/view.ts gateLayout
-// and scoredCues), and which packets with g null are reset frames of G, from lm of the "m" lines of
-// samples.jsonl (analysis/rivals/g.ts gResetSeqs). stream.jsonl keeps only the "arr" stamps, as
-// nArr, and events.jsonl holds no mark. So pack writes both into a gate set (analysis/pack.ts):
-// MARKS_FILE, the mark lines as they are, and RESETS_FILE, the packets gResetSeqs finds. A set
-// without them (from an earlier pack, or with a file taken out) still replays, and every value that
-// needs them is then "not recomputable from the set". Like stream.jsonl, they are trusted as
-// published: nothing else in the set ties them to the recording, beyond the checks here.
+// and scoredCues); which packets with g null are reset frames of G, from lm of the "m" lines of
+// samples.jsonl (analysis/rivals/g.ts gResetSeqs); and the sniff onsets of row 4, which it finds in
+// audio.wav channel 0 after the sniff_<i> step marks (analysis/clocks/compute.ts recountSniffLag).
+// stream.jsonl keeps only the "arr" stamps, as nArr, and events.jsonl holds no mark. So pack writes
+// them into a gate set (analysis/pack.ts): MARKS_FILE, the mark lines as they are, RESETS_FILE, the
+// packets gResetSeqs finds, and SNIFFS_FILE, the onsets recountSniffLag finds (with the verdict
+// only). A set without them (from an earlier pack, or with a file taken out) still replays, and
+// every value that needs them is then "not recomputable from the set". Like stream.jsonl, they are
+// trusted as published: nothing else in the set ties them to the recording, beyond the checks here.
 //
 // A gate set without verdict.json is the set of a recording that never reached its verdict, for
 // which pack writes no verdict files (PREREG sections 7 and 11): replay reads and checks its files
@@ -32,6 +35,9 @@ import {
   validateClockReport,
   validateGResets,
   validateMarkLine,
+  validateSniffOnsets,
+  inexactJsonlLines,
+  inexactLineProblem,
   validateOnsets,
   validatePublishedManifest,
   validateStreamLine,
@@ -51,6 +57,7 @@ import { CUE_SEARCH_MS, gateCues } from '../label/gate-onsets.ts';
 import { REPO_ROOT, dataDir } from '../lib/paths.ts';
 import { gateSteps } from '../lib/steps.ts';
 import { whyNotMeasured } from '../pack/rules.ts';
+import { sniffOnsetsProblems } from './sniffs.ts';
 
 /** The files of the set replay reads (spec 8.7). */
 export const SET_FILES = {
@@ -75,6 +82,14 @@ export const MARKS_FILE = 'marks.jsonl';
  * order (core/schemas validateGResets). Pack writes it into a gate set (analysis/pack.ts gResetsJson).
  */
 export const RESETS_FILE = 'g_resets.json';
+
+/**
+ * The sniff onsets of row 4: {"schema":"sniff-onsets/1","onsets":[...]}, n_sniff of each sniff
+ * stage B heard in audio.wav channel 0, in prompt order (core/schemas validateSniffOnsets). Pack
+ * writes it into a gate set with a verdict (analysis/pack.ts sniffOnsetsJson); replay recounts the
+ * sniff lag from it (sniffs.ts sniffRecountFrom).
+ */
+export const SNIFFS_FILE = 'sniff_onsets.json';
 
 /** A set replay cannot read or score: the message says what is wrong and what to do. */
 export class ReplayRefusal extends Error {
@@ -105,6 +120,8 @@ export interface PublishedSet {
   marks: MarkLine[] | null;
   /** The reset frames RESETS_FILE lists; null when the set has no such file. */
   resets: Set<number> | null;
+  /** The sniff onsets SNIFFS_FILE lists; null when the set has no such file. */
+  sniffOnsets: number[] | null;
 }
 
 /**
@@ -229,11 +246,23 @@ function resetsOf(text: string, where: string, inputs: readonly DetectorInput[])
   return new Set(p.value.seqs);
 }
 
-/** The lines of MARKS_FILE (core/schemas validateMarkLine); a refusal says what is wrong. */
+/**
+ * The lines of MARKS_FILE (core/schemas validateMarkLine), each as JSON.stringify writes it, as pack
+ * copies them from stamps.jsonl (core/schemas inexactJsonlLines); a refusal says what is wrong.
+ */
 function marksOf(text: string, where: string): MarkLine[] {
   const m = parseJsonl(text, validateMarkLine, { file: MARKS_FILE });
   if (m.errors.length > 0) throw new ReplayRefusal(`${where} is not valid (core/schemas):\n  ${problemList(m.errors)}`);
+  const inexact = inexactJsonlLines(text).map((line) => inexactLineProblem(MARKS_FILE, line));
+  if (inexact.length > 0) throw new ReplayRefusal(`${where} is not as pack writes it:\n  ${problemList(inexact)}\n  Fetch the whole folder again`);
   return m.rows;
+}
+
+/** The onsets of SNIFFS_FILE (core/schemas validateSniffOnsets); a refusal says what is wrong. */
+function sniffOnsetsOf(text: string, where: string): number[] {
+  const p = parseJson(text, validateSniffOnsets, { file: SNIFFS_FILE });
+  if (p.value === null) throw new ReplayRefusal(`${where} is not valid (core/schemas):\n  ${problemList(p.errors)}`);
+  return p.value.onsets;
 }
 
 /**
@@ -266,7 +295,7 @@ export function marksProblems(marks: readonly MarkLine[], onsets: Onsets, pack: 
 const WITH_VERDICT = 'every published gate set with a verdict holds it (spec 8.7); fetch the whole folder again';
 
 /** The files a set without verdict.json may hold that replay reads, in the order pack writes them (analysis/pack.ts SET_ORDER). */
-const VERDICTLESS_READ = [SET_FILES.manifest, SET_FILES.stream, MARKS_FILE, RESETS_FILE, SET_FILES.onsets, SET_FILES.calib, SET_FILES.clockReport] as const;
+const VERDICTLESS_READ = [SET_FILES.manifest, SET_FILES.stream, MARKS_FILE, RESETS_FILE, SNIFFS_FILE, SET_FILES.onsets, SET_FILES.calib, SET_FILES.clockReport] as const;
 
 /**
  * Reads one published gate set: a PublishedSet when it holds verdict.json, a VerdictlessSet when it
@@ -336,6 +365,9 @@ export function readSetFolder(dir: string): PublishedSet | VerdictlessSet {
       }
       resetsOf(resetsText, where(RESETS_FILE), stream.inputs);
     }
+    // Not checked against marks.jsonl: replay recounts nothing with them here.
+    const sniffsText = optional(SNIFFS_FILE);
+    if (sniffsText !== null) sniffOnsetsOf(sniffsText, where(SNIFFS_FILE));
     const onsets = optionalJson(SET_FILES.onsets, validateOnsets);
     optionalJson(SET_FILES.calib, validateCalib);
     const clockReport = optionalJson(SET_FILES.clockReport, validateClockReport);
@@ -370,6 +402,17 @@ export function readSetFolder(dir: string): PublishedSet | VerdictlessSet {
     }
   }
   const resetsText = optional(RESETS_FILE);
+  let sniffOnsets: number[] | null = null;
+  const sniffsText = optional(SNIFFS_FILE);
+  if (sniffsText !== null) {
+    sniffOnsets = sniffOnsetsOf(sniffsText, where(SNIFFS_FILE));
+    const problems = marks === null ? [] : sniffOnsetsProblems(sniffOnsets, marks, gateSteps(pack).sniffs);
+    if (problems.length > 0) {
+      throw new ReplayRefusal(
+        `${where(SNIFFS_FILE)} does not fit ${MARKS_FILE}, so its onsets are not the ones of this recording:\n  ${problemList(problems)}\n  Fetch the set again, or take ${SNIFFS_FILE} out of the folder to replay it without the sniff onsets`,
+      );
+    }
+  }
 
   return {
     dir,
@@ -386,6 +429,7 @@ export function readSetFolder(dir: string): PublishedSet | VerdictlessSet {
     verdictMd,
     marks,
     resets: resetsText === null ? null : resetsOf(resetsText, where(RESETS_FILE), inputs),
+    sniffOnsets,
   };
 }
 

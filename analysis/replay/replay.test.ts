@@ -13,6 +13,7 @@ import {
   G_RESETS_SCHEMA,
   buildStreamJsonl,
   parseJson,
+  splitJsonlLines,
   toJsonText,
   toPublishedManifest,
   validateManifest,
@@ -28,11 +29,12 @@ import { buildGateSynth, preregParamsText, writeGateSession, type GateSynthOptio
 import { verdictMarkdown } from '../gate/verdict-text.ts';
 import { sha256Hex } from '../lib/ledger.ts';
 import { REPO_ROOT } from '../lib/paths.ts';
+import { sniffOnsetsJson } from '../pack.ts';
 import { gResetSeqs, type SampleLmLike } from '../rivals/index.ts';
 import { main, parseReplayArgs, type ReplayDeps } from '../replay.ts';
 import { findParams, tunedByStageA, tunedStepOf } from './params.ts';
 import { replaySet, sniffEdgeOf, VERDICT_FIELDS, type Check, type ScoredSet, type SetReplay } from './recompute.ts';
-import { MARKS_FILE, RESETS_FILE, readPublishedSet, setFolderOf, unreadFolderWhy } from './set.ts';
+import { MARKS_FILE, RESETS_FILE, SNIFFS_FILE, readPublishedSet, setFolderOf, unreadFolderWhy } from './set.ts';
 import { replayTable, tableProblems, type ReplayTable } from './table.ts';
 
 const PREREG = preregParamsText();
@@ -132,11 +134,12 @@ function jsonl<T>(text: string): T[] {
  * and stamps.jsonl, audio_env.json (levels only; replay does not read it) and the copied files;
  * audio.wav, samples.jsonl, stamps.jsonl, detector_in.jsonl, ledger.jsonl and quickcheck.json
  * stay out. With `marks`, the "mark" lines of stamps.jsonl go into marks.jsonl as they are; with
- * `resets`, the reset frames stage B found go into g_resets.json. Pack writes both into every gate
- * set (analysis/pack.ts; pack-replay.test.ts runs pack itself); without them the set is one an
- * earlier pack wrote.
+ * `resets`, the reset frames stage B found go into g_resets.json; with `sniffs`, the sniff onsets
+ * stage B found go into sniff_onsets.json, as pack finds them (analysis/pack.ts sniffOnsetsJson).
+ * Pack writes all three into a gate set with its verdict (pack-replay.test.ts runs pack itself);
+ * without them the set is one an earlier pack wrote.
  */
-function publish(session: string, out: string, o: { marks: boolean; resets?: boolean }): string {
+function publish(session: string, out: string, o: { marks: boolean; resets?: boolean; sniffs?: boolean }): string {
   fs.mkdirSync(out, { recursive: true });
   const read = (f: string): string => fs.readFileSync(path.join(session, f), 'utf8');
   const manifest = parseJson(read('manifest.json'), validateManifest).value as Manifest;
@@ -153,6 +156,13 @@ function publish(session: string, out: string, o: { marks: boolean; resets?: boo
   if (o.resets) {
     const seqs = [...gResetSeqs(jsonl<DetectorInput>(read('detector_in.jsonl')), jsonl<SampleLmLike>(read('samples.jsonl'))).seqs].sort((a, b) => a - b);
     fs.writeFileSync(path.join(out, RESETS_FILE), `${JSON.stringify({ schema: G_RESETS_SCHEMA, seqs })}\n`);
+  }
+  if (o.sniffs) {
+    const files = new Map(['stream.jsonl', MARKS_FILE, 'calib.json'].map((f) => [f, fs.readFileSync(path.join(out, f))] as const));
+    const notes: string[] = [];
+    const text = sniffOnsetsJson(session, files, notes);
+    expect(notes).toEqual([]);
+    fs.writeFileSync(path.join(out, SNIFFS_FILE), text!);
   }
   return out;
 }
@@ -199,14 +209,19 @@ function last(out: readonly string[]): string {
   return out[out.length - 1]!;
 }
 
-const VERIFIED = /^replay: verified: the verdict and the five row outcomes of (the set are|all \d+ sets are) recomputed and match, and no recomputed value differs \(/;
+/**
+ * The last line of a verified run. A set without sniff_onsets.json leaves best_case_ms and
+ * d1_on_sniffs_ms unchecked (NEVER), and the line names them; no other value may stay unchecked.
+ */
+const VERIFIED =
+  /^replay: verified: the verdict and the five row outcomes of (the set are|all \d+ sets are) recomputed and match, and no recomputed value differs(, but these values are not recomputable from (the set|their sets) and stay unchecked: data\/[\w-]+\/ rows\.sniff_lag\.best_case_ms, rows\.sniff_lag\.d1_on_sniffs_ms(; data\/[\w-]+\/ rows\.sniff_lag\.best_case_ms, rows\.sniff_lag\.d1_on_sniffs_ms)*)? \(/;
 const NOT_VERIFIED = /^replay: no recomputed value differs, but the verdict is not verified: /;
 const NO_RESET = 'MATCH if no packet with g null was a reset frame';
 
 /** Hand marks 2, 4, ... 28 ms after the automatic onsets, so that the P90 of |auto - manual| rests on single marks. */
 const PLAN: ReplyPlan[] = Array.from({ length: 14 }, (_, i) => ({ kind: i < 10 ? 'inhale' : 'plain', manualShiftMs: 2 * (i + 1) }));
 
-/** Values replay never has from a set: the recount of row 4 from audio.wav. */
+/** Values replay cannot have from a set without sniff_onsets.json: the recount of row 4 from audio.wav. */
 const NEVER = ['rows.sniff_lag.best_case_ms', 'rows.sniff_lag.d1_on_sniffs_ms'];
 
 describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6, 9.7)', () => {
@@ -251,11 +266,16 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     }
     expect(lineOf(out, 'params_sha256')).toMatch(/ +- +[0-9a-f]{8} +an input of the replay: replay finds the params by this hash/);
     expect(lineOf(out, 'rows.sniff_lag.best_case_ms')).toMatch(
-      /not recomputable from the set: needs the sniff onsets stage B finds in audio\.wav channel 0 after the sniff_<i> step marks, placed by the chunk stamps of stamps\.jsonl \(analysis\/clocks\/compute\.ts recountSniffLag\); stamps\.jsonl is never published, and replay reads no audio$/,
+      /not recomputable from the set: needs the sniff onsets stage B finds in audio\.wav channel 0 after the sniff_<i> step marks \(analysis\/clocks\/compute\.ts recountSniffLag\), which the set does not carry \(no sniff_onsets\.json\); replay reads no audio$/,
     );
     expect(out.some((l) => / DIFFERS$/.test(l))).toBe(false);
     expect(last(out)).toMatch(VERIFIED);
-    expect(last(out)).toMatch(/all 2 sets are recomputed and match, and no recomputed value differs \(\d+ MATCH, 0 DIFFERS, 4 not recomputable from the set, 2 inputs\)$/);
+    // These sets are as an earlier pack wrote them, without sniff_onsets.json: the line names what stays unchecked.
+    expect(last(out)).toBe(
+      `replay: verified: the verdict and the five row outcomes of all 2 sets are recomputed and match, and no recomputed value differs, but these values are not recomputable from their sets and stay unchecked: data/gate-a/ ${NEVER.join(', ')}; data/gate-b/ ${NEVER.join(', ')} (see above; ${
+        out.filter((l) => / MATCH$/.test(l)).length
+      } MATCH, 0 DIFFERS, 4 not recomputable from the set, 2 inputs)`,
+    );
 
     for (const dir of [setA, setB]) {
       const checks = checksOf(dir, r);
@@ -551,6 +571,22 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     expect(run2.err[0]).toBe(`replay refused ${noOnsets}: ${path.join(noOnsets, 'onsets.json')} is missing: pack copies it with verdict.json, which is here (spec 8.7); fetch the whole folder again`);
   });
 
+  it('refuses a marks.jsonl line that is not as pack copies it from stamps.jsonl: a key given twice would publish a value no check reads', async () => {
+    const dir = copySet(setA, path.join(root, 'two', 'twice', 'gate-a'));
+    const file = path.join(dir, MARKS_FILE);
+    const lines = splitJsonlLines(fs.readFileSync(file, 'utf8'));
+    // A step mark whose name is given twice: JSON.parse keeps the second, a step name, and the first is text.
+    const step = lines.findIndex((l) => (JSON.parse(l) as { what: string }).what === 'step');
+    lines[step] = lines[step]!.replace('"name":', '"name":"Breathe in, then speak","name":');
+    fs.writeFileSync(file, `${lines.join('\n')}\n`);
+    expect((JSON.parse(lines[step]!) as { name: string }).name).toMatch(/^[a-z0-9_]+$/);
+    const run = replayDeps(r);
+    expect(await main([dir], run.deps)).toBe(1);
+    expect(run.err).toEqual([
+      `replay refused ${dir}: ${file} is not as pack writes it:\n  marks.jsonl line ${step + 1}: not as JSON.stringify writes its value (a key given twice, a space or an escape differs), as Deck writes every mark line and pack publishes it unchanged; a key given twice would publish a value that no check reads\n  Fetch the whole folder again`,
+    ]);
+  });
+
   it('checks a set without verdict.json, as pack writes one for a recording that never reached its verdict: nothing differs, and there is no verdict to verify; exit 3', async () => {
     const dir = copySet(setA, path.join(root, 'two', 'no-verdict', 'gate-a'));
     for (const f of ['verdict.json', 'verdict.md']) fs.rmSync(path.join(dir, f));
@@ -570,7 +606,7 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     expect(lineOf(out, 'clock_report.json onset.p90_abs_auto_minus_manual_ms')).toMatch(/ MATCH$/);
     expect(out.some((l) => / DIFFERS$/.test(l))).toBe(false);
     expect(last(out)).toBe(
-      'replay: no recomputed value differs, but the verdict is not verified: data/gate-a/ verdict is not recomputable from the set or match only under a condition it does not show (see above; 2 MATCH, 0 DIFFERS, 1 not recomputable from the set, 0 inputs)',
+      'replay: no recomputed value differs, but the verdict is not verified: data/gate-a/ verdict is not recomputable from the set or matches only under a condition it does not show (see above; 2 MATCH, 0 DIFFERS, 1 not recomputable from the set, 0 inputs)',
     );
 
     // Without onsets.json, as pack A writes the set while part B is held back (PREREG section 7.5),
@@ -781,6 +817,65 @@ describe('a set whose stream.jsonl has packets with g null (spec 7.5, 8.1)', () 
   });
 });
 
+describe('row 4 recounted from sniff_onsets.json (spec 6.3, 9.6, PREREG §4)', () => {
+  let r: Repo;
+  let session: string;
+  let set: string;
+
+  beforeAll(async () => {
+    r = repo('sniffs');
+    // Five sniffs before the listening block, and no sniff block in calib.json: stage B recounted row 4 from audio.wav.
+    session = await scored(r, 'gate-a', { replies: PLAN, sniffs: true, sniffLag: null });
+    set = publish(session, path.join(root, 'sniffs', 'data', 'gate-a'), { marks: true, resets: true, sniffs: true });
+  }, 120_000);
+
+  it('recounts every number of row 4 from the onsets when calib.json has no sniff block, as stage B did, and verifies the verdict; exit 0', async () => {
+    const v = JSON.parse(fs.readFileSync(path.join(set, 'verdict.json'), 'utf8')) as Verdict;
+    expect(v.rows.sniff_lag.n).toBe(5);
+    expect(v.rows.sniff_lag.best_case_ms).toBeGreaterThan(0);
+    expect(v.rows.sniff_lag.d1_on_sniffs_ms).toBeGreaterThan(0);
+    const run = replayDeps(r);
+    expect(await main([set], run.deps)).toBe(0);
+    expect(run.err).toEqual([]);
+    for (const name of ['outcome', 'lo_median_ms', 'hi_median_ms', 'median_over_ms', 'n', 'no_arrival', 'best_case_ms', 'd1_on_sniffs_ms']) {
+      expect(lineOf(run.out, `rows.sniff_lag.${name}`)).toMatch(/ MATCH$/);
+    }
+    expect(lineOf(run.out, 'verdict')).toMatch(/ MATCH$/);
+    expect(lineOf(run.out, 'verdict.md')).toMatch(/ MATCH$/);
+    expect(run.out).toContain(
+      '  note: row 4: replay recounts the sniff lag as stage B does (analysis/clocks/compute.ts recountSniffLag), from the 5 sniff onsets sniff_onsets.json lists, the trace of stream.jsonl and calib.json, and D1 on sniffs from those onsets (analysis/gate/sniffs.ts sniffRow)',
+    );
+    expect(checksOf(set, r).filter((c) => c.status !== 'MATCH' || c.condition !== null).map((c) => c.name)).toEqual(['params_sha256']);
+    expect(last(run.out)).toMatch(/^replay: verified: the verdict and the five row outcomes of the set are recomputed and match, and no recomputed value differs \(\d+ MATCH, 0 DIFFERS, 0 not recomputable from the set, 1 input\)$/);
+
+    // Without the file every number of row 4 needs audio.wav, and the verdict matches only for the row 4 of verdict.json: exit 3.
+    const bare = publish(session, path.join(root, 'sniffs', 'bare', 'gate-a'), { marks: true, resets: true });
+    const without = replayDeps(r);
+    expect(await main([bare], without.deps)).toBe(3);
+    expect(lineOf(without.out, 'rows.sniff_lag.n')).toMatch(
+      /not recomputable from the set: calib\.json has no sniff_lag_ms, so stage B recounted the sniff lag, and the recount needs the sniff onsets stage B finds in audio\.wav channel 0/,
+    );
+    expect(last(without.out)).toMatch(/^replay: no recomputed value differs, but the verdict is not verified: data\/gate-a\/ row sniff_lag, verdict are not recomputable/);
+  });
+
+  it('a sniff_onsets.json without one of its onsets recounts another row 4: its values differ from verdict.json; exit 1', async () => {
+    const dir = copySet(set, path.join(root, 'sniffs', 'four', 'gate-a'));
+    editJson(path.join(dir, SNIFFS_FILE), (j) => {
+      j['onsets'] = (j['onsets'] as number[]).slice(1);
+    });
+    const run = replayDeps(r);
+    expect(await main([dir], run.deps)).toBe(1);
+    expect(run.err).toEqual([]);
+    expect(lineOf(run.out, 'rows.sniff_lag.n')).toMatch(/ 4 +5 +DIFFERS$/);
+    expect(run.out).toContain(
+      '  note: row 4: replay recounts the sniff lag as stage B does (analysis/clocks/compute.ts recountSniffLag), from the 4 sniff onsets sniff_onsets.json lists, the trace of stream.jsonl and calib.json, and D1 on sniffs from those onsets (analysis/gate/sniffs.ts sniffRow)',
+    );
+    expect(last(run.out)).toBe(
+      `replay: 5 recomputed values differ from the set: ${['lo_median_ms', 'hi_median_ms', 'n', 'best_case_ms', 'd1_on_sniffs_ms'].map((f) => `gate-a rows.sniff_lag.${f}`).join(', ')}`,
+    );
+  });
+});
+
 describe('what a set does not say: OTHER, row 4 and the end of the scored block (spec 9.3, 9.6, 14.4)', () => {
   let r: Repo;
   let set: string;
@@ -808,7 +903,7 @@ describe('what a set does not say: OTHER, row 4 and the end of the scored block 
     expect(await main([dir], run.deps)).toBe(3);
     for (const name of ['outcome', 'lo_median_ms', 'hi_median_ms', 'median_over_ms', 'n', 'no_arrival']) {
       expect(lineOf(run.out, `rows.sniff_lag.${name}`)).toMatch(
-        /not recomputable from the set: calib\.json has no sniff_lag_ms, so stage B recounted the sniff lag from audio\.wav channel 0 after the sniff_<i> step marks, with the arrivals of samples\.jsonl and the chunk stamps of stamps\.jsonl \(analysis\/clocks\/compute\.ts recountSniffLag\); samples\.jsonl and stamps\.jsonl are never published, and replay reads no audio$/,
+        /not recomputable from the set: calib\.json has no sniff_lag_ms, so stage B recounted the sniff lag, and the recount needs the sniff onsets stage B finds in audio\.wav channel 0 after the sniff_<i> step marks \(analysis\/clocks\/compute\.ts recountSniffLag\), which the set does not carry \(no sniff_onsets\.json\); replay reads no audio$/,
       );
     }
     expect(lineOf(run.out, 'verdict')).toMatch(/ PASS +PASS +MATCH if row 4 read PASS on the recount from audio\.wav$/);

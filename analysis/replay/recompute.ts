@@ -18,9 +18,11 @@
 //   gResetSeqs); pack writes them into set.ts RESETS_FILE, and without that file replay scores two
 //   readings, every null a reset and none (gReadings);
 // - the sniff onsets of row 4: audio.wav channel 0 after the sniff_<i> step marks
-//   (clocks/compute.ts recountSniffLag), for best_case_ms and d1_on_sniffs_ms, for every number of
-//   row 4 when calib.json has no sniff block, and for its grade when a median of calib.json sits
-//   on a threshold (sniffSides).
+//   (clocks/compute.ts recountSniffLag); pack writes them into set.ts SNIFFS_FILE, and replay
+//   recounts the sniff lag from them as stage B does (sniffs.ts sniffRecountFrom). Without that
+//   file best_case_ms and d1_on_sniffs_ms are not recomputable from the set, nor is every number
+//   of row 4 when calib.json has no sniff block, and its grade has two readings when a median of
+//   calib.json sits on a threshold (sniffSides).
 // A value that differs between those readings MATCHes when one reading gives every such value of
 // verdict.json at once, and the line names that condition; analysis/replay.ts counts the verdict
 // as verified only when it and the row outcomes match without one.
@@ -28,9 +30,10 @@
 import { chunkLayout, SNIFF_KILL_MIN_MS, SNIFF_PASS_MAX_MS, type Stamp } from '../../core/clock/index.ts';
 import { d1ParamsFromFrozen, type FrozenParamsLike, type Sign } from '../../core/detector.ts';
 import { combineGateVerdict, GATE_OUTCOMES, VERDICT_ROWS, type ClockReport, type GateOutcome, type Onsets, type Verdict } from '../../core/schemas/index.ts';
-import { GateRefusal, RATE, lrtUseFrom, round1, type LrtUse } from '../gate/common.ts';
+import type { SniffRecount } from '../clocks/compute.ts';
+import { GateRefusal, RATE, coreLrtOf, lrtUseFrom, round1, type LrtUse } from '../gate/common.ts';
 import { gSettingsOf, sameJson, variantOf, withoutStageAKeys } from '../gate/frozen.ts';
-import { scoreGate, type GateScore, type GateScoreInput } from '../gate/score.ts';
+import { scoreGate, sniffNotes, type GateScore, type GateScoreInput } from '../gate/score.ts';
 import { calibSniffBlockOf } from '../gate/sniffs.ts';
 import { signOf } from '../gate/stage-a.ts';
 import { tuneStageA } from '../gate/tune.ts';
@@ -41,7 +44,8 @@ import { objectionBlockEnd } from '../lib/conditions.ts';
 import { sha256Hex } from '../lib/ledger.ts';
 import type { LoadedSession } from '../lib/session.ts';
 import { tunedByStageA, tunedStepOf, type ParamsMatch } from './params.ts';
-import { MARKS_FILE, RESETS_FILE, ReplayRefusal, type PublishedSet, type VerdictlessSet } from './set.ts';
+import { MARKS_FILE, RESETS_FILE, ReplayRefusal, SNIFFS_FILE, type PublishedSet, type VerdictlessSet } from './set.ts';
+import { sniffRecountFrom } from './sniffs.ts';
 
 /** INPUT: a value replay takes from the set to find what stage B scored with, so it is no result. */
 export type CheckStatus = 'MATCH' | 'DIFFERS' | 'NOT_RECOMPUTABLE' | 'INPUT';
@@ -130,12 +134,14 @@ interface SniffSide {
 }
 
 /**
- * The outcomes row 4 may have had. Replay grades the sniff block of calib.json as written
- * (sniffs.ts blockGrading); stage B grades it on the unrounded medians of its recount from
+ * The outcomes row 4 may have had. With the recount (SNIFFS_FILE) replay grades row 4 as stage B
+ * does (sniffs.ts sniffRow): one side. Without it replay grades the sniff block of calib.json as
+ * written (sniffs.ts blockGrading); stage B grades it on the unrounded medians of its recount from
  * audio.wav when the recount agrees, so at a threshold the other side is possible too, and without
  * a sniff block every outcome is.
  */
-function sniffSides(calib: PublishedSet['calib']): SniffSide[] {
+function sniffSides(calib: PublishedSet['calib'], recount: SniffRecount | null): SniffSide[] {
+  if (recount !== null) return [{ outcome: null, text: null }];
   const block = calibSniffBlockOf(calib);
   if (block === null) return GATE_OUTCOMES.map((o) => ({ outcome: o, text: `if row 4 read ${o} on the recount from audio.wav` }));
   const edge = sniffEdgeOf({ lo: block.lo_median, hi: block.hi_median, over: block.median_over_ms, n: block.n });
@@ -384,6 +390,21 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
   const g = gReadings(set);
   const mv = marksOf(set);
   const nCut = mv.layout?.nCut ?? 0;
+  // Row 4 recounted as stage B recounts it, from the sniff onsets of the set and the listening
+  // step of the marks (sniffs.ts); without either, from calib.json alone.
+  const whyNoRecount: string | null =
+    set.sniffOnsets === null
+      ? `needs the sniff onsets stage B finds in audio.wav channel 0 after the sniff_<i> step marks (analysis/clocks/compute.ts recountSniffLag), which the set does not carry (no ${SNIFFS_FILE}); replay reads no audio`
+      : mv.layout === null
+        ? (mv.whyNoCut ?? `needs the step marks, which the set does not carry (no ${MARKS_FILE})`)
+        : null;
+  const recount: SniffRecount | null =
+    set.sniffOnsets !== null && mv.layout !== null
+      ? sniffRecountFrom(
+          { inputs: set.inputs, nArrBySeq: set.nArrBySeq, marks: set.marks ?? [], listening: mv.layout.gate.listening, lrt: coreLrtOf(set.calib.L_rt_ms!), sign },
+          set.sniffOnsets,
+        )
+      : null;
   const base: Omit<GateScoreInput, 'resetSeqs'> = {
     id: set.id,
     pack: set.pack,
@@ -405,8 +426,7 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
     calib: set.calib,
     onsetP90Ms: onsetBlock.p90_abs_auto_minus_manual_ms,
     criterionMet: params.criterionMet,
-    // Row 4 from calib.json alone: the recount needs audio.wav (see the head of this file).
-    sniffRecount: null,
+    sniffRecount: recount,
     skipOther: false,
   };
   const scores = g.readings.map((r) => scoreGate({ ...base, resetSeqs: r.resets }));
@@ -422,7 +442,7 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
   const tunedHere = byStageA && (set.pack === 'A' || (retuned !== null && retuned.every((t) => sameJson(t, ofParams))));
   const tunings = tunedHere ? retuned : null;
 
-  const sides = sniffSides(set.calib);
+  const sides = sniffSides(set.calib, recount);
   const scenarios: Scenario[] = scores.flatMap((score, reading) =>
     sides.map((side, s) => ({ reading, side: s, verdict: onSide(score.verdict, side.outcome), tuning: tunings?.[reading] ?? score.verdict.tuning })),
   );
@@ -437,11 +457,9 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
       case 'cut':
         return mv.whyNoCut;
       case 'sniffBlock':
-        return block === null
-          ? 'calib.json has no sniff_lag_ms, so stage B recounted the sniff lag from audio.wav channel 0 after the sniff_<i> step marks, with the arrivals of samples.jsonl and the chunk stamps of stamps.jsonl (analysis/clocks/compute.ts recountSniffLag); samples.jsonl and stamps.jsonl are never published, and replay reads no audio'
-          : null;
+        return block === null && whyNoRecount !== null ? `calib.json has no sniff_lag_ms, so stage B recounted the sniff lag, and the recount ${whyNoRecount}` : null;
       case 'sniffAudio':
-        return 'needs the sniff onsets stage B finds in audio.wav channel 0 after the sniff_<i> step marks, placed by the chunk stamps of stamps.jsonl (analysis/clocks/compute.ts recountSniffLag); stamps.jsonl is never published, and replay reads no audio';
+        return whyNoRecount;
     }
   };
 
@@ -552,6 +570,12 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
   if (mv.whyNoCues !== null && set.marks === null) {
     notes.push(
       `stage B takes the cues and the step marks (listening, objections, the first step after the cues) from the "mark" lines of stamps.jsonl (analysis/gate/view.ts); stamps.jsonl is not published (spec 8.7), neither stream.jsonl nor events.jsonl holds them, and this set has no ${MARKS_FILE}, the copy of those lines that pack writes into a gate set, so every value that needs them is not recomputable from this set`,
+    );
+  }
+  if (recount !== null) {
+    notes.push(
+      `row 4: replay recounts the sniff lag as stage B does (analysis/clocks/compute.ts recountSniffLag), from the ${recount.onsets.length} sniff onsets ${SNIFFS_FILE} lists, the trace of stream.jsonl and calib.json, and D1 on sniffs from those onsets (analysis/gate/sniffs.ts sniffRow)`,
+      ...sniffNotes(scores[0]!.sniff, recount),
     );
   }
   if (g.source === 'file') {
@@ -672,10 +696,15 @@ function verdictMdCheck(set: PublishedSet): { check: Check; note: string | null 
 
 /**
  * The values the label step writes from onsets.json (analysis/label.ts): labels_sha256, and the
- * P90 of |auto - manual| in clock_report.json, which stage B reads there.
+ * P90 of |auto - manual| in clock_report.json, which stage B reads there. labels_sha256 null is
+ * what the onsets step writes, before any event holds a blind label or a hand mark (core/schemas
+ * refuses either without the hash), so it stands as recomputed while none does, also with no
+ * event at all, where the label step would write the hash of no label. Any other value is
+ * recomputed as the hash of the labels the events carry.
  */
 function onsetChecks(onsets: Onsets, clockReport: ClockReport | null): Check[] {
-  const out = [plain('onsets.json labels_sha256', 'onsets.json', onsetsLabelsSha256(onsets, sha256Hex), onsets.labels_sha256)];
+  const unlabelled = onsets.labels_sha256 === null && onsets.events.every((e) => e.label === null && e.manual === null);
+  const out = [plain('onsets.json labels_sha256', 'onsets.json', unlabelled ? null : onsetsLabelsSha256(onsets, sha256Hex), onsets.labels_sha256)];
   if (clockReport !== null) {
     const p90 = onsetErrorBlock(onsets, RATE).p90_abs_auto_minus_manual_ms;
     out.push(plain('clock_report.json onset.p90_abs_auto_minus_manual_ms', 'clock_report.json', p90, clockReport.onset?.p90_abs_auto_minus_manual_ms ?? null));

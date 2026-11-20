@@ -12,17 +12,22 @@
 // stamps.jsonl; copies of events.jsonl, onsets.json, calib.json and clock_report.json; verdict.md
 // and verdict.json (gate only, once the verdict is in the ledger); audio_env.json, the level of both
 // channels of audio.wav every 10 ms; and audio.wav itself, 16 bit, only with --with-audio. A gate
-// set also gets the two files npm run replay recomputes its verdict with (analysis/replay/README.md):
+// set also gets the files npm run replay recomputes its verdict with (analysis/replay/README.md):
 // marks.jsonl, the "mark" lines of stamps.jsonl as they are (sample numbers, cue numbers and step
-// names, no text), and g_resets.json, the packets stage B reads as reset frames of G, which pack
-// finds as stage B does, with rivals gResetSeqs on detector_in.jsonl and samples.jsonl: so pack
-// reads samples.jsonl of a gate recording, and checks it against the ledger like every file it
-// reads. A headstart take gets neither: replay scores gate sets only. Nothing else: never
-// sdk_raw.jsonl.gz, samples.jsonl, stamps.jsonl, detector_in.jsonl, quickcheck.json, ledger.jsonl,
-// timings.json or tap.log. The whole set is checked with validatePublishedFolder and scanned for
-// what the manifest keeps private (a path into a home folder, as an SDK error message can hold, and
-// the system name of a device that --alias replaces) before anything is written, then written into
-// a temporary folder beside data/<id>/ and renamed.
+// names, no text; a line that is not as JSON.stringify writes it is refused), and g_resets.json,
+// the packets stage B reads as reset frames of G, which pack finds as stage B does, with rivals
+// gResetSeqs on detector_in.jsonl and samples.jsonl: so pack reads samples.jsonl of a gate
+// recording, and checks it against the ledger like every file it reads. With the verdict, also
+// sniff_onsets.json, the sample numbers of the sniff onsets that stage B finds in audio.wav channel
+// 0 for row 4, which pack finds as stage B does: it loads the recording as stage B loads it and
+// runs clocks/compute.ts recountSniffLag, and writes the file only when replay's recount from the
+// set gives the same (sniffOnsetsJson). A headstart take gets none of them: replay scores gate
+// sets only. Nothing else: never sdk_raw.jsonl.gz, samples.jsonl, stamps.jsonl, detector_in.jsonl,
+// quickcheck.json, ledger.jsonl, timings.json or tap.log. The whole set is checked with
+// validatePublishedFolder and scanned for what the manifest keeps private (a path into a home
+// folder, as an SDK error message can hold, and the system name of a device that --alias
+// replaces) before anything is written, then written into a temporary folder beside data/<id>/
+// and renamed.
 //
 // --devices-ok      the device and machine names printed are fine as they stand in the published
 //                   manifest. Without it pack prints them and writes nothing (exit 1).
@@ -48,10 +53,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chunkLayout, type EventLine } from '../core/clock/index.ts';
-import type { DetectorInput } from '../core/detector.ts';
+import { parseStream, type DetectorInput } from '../core/detector.ts';
 import {
   G_RESETS_SCHEMA,
   SESSION_ID,
+  SNIFF_ONSETS_SCHEMA,
   buildStreamJsonl,
   canAppendStep,
   findSteps,
@@ -65,10 +71,12 @@ import {
   splitTruncatedTail,
   toJsonText,
   toPublishedManifest,
+  validateCalib,
   validateClockReport,
   validateDetectorInLine,
   validateEventLine,
   validateManifest,
+  validateMarkLine,
   validatePublishedFolder,
   validateQuickcheck,
   validateSampleLine,
@@ -81,15 +89,20 @@ import {
   type StreamText,
   type Validator,
 } from '../core/schemas/index.ts';
+import { recountSniffLag, type SniffRecount } from './clocks/compute.ts';
+import { GateRefusal, coreLrtOf } from './gate/common.ts';
+import { sameJson } from './gate/frozen.ts';
 import { creditsUsedUp, nextRecordingAdvice, recordedHash, recordingVoidReasons } from './gate/inputs.ts';
-import { arrivalsBefore, detectorInPrefixLength } from './gate/view.ts';
+import { signOf } from './gate/stage-a.ts';
+import { arrivalsBefore, detectorInPrefixLength, gateLayout } from './gate/view.ts';
 import { gitShortCommit } from './lib/git.ts';
 import { prepareLedgerStep, sha256Hex, utcSeconds, writeLedgerLine } from './lib/ledger.ts';
 import { REPO_ROOT, dataDir, sessionsDir, shownPath } from './lib/paths.ts';
-import { SESSION_FILES } from './lib/session.ts';
+import { SESSION_FILES, SessionLoadError, loadSession, type LoadedSession } from './lib/session.ts';
 import { gateSteps } from './lib/steps.ts';
 import { readSessionAudio, type SessionAudio } from './pack/audio.ts';
 import { PackRefusal, formatBytes, groupDigits, whyNoSet, whyNotMeasured } from './pack/rules.ts';
+import { sniffRecountFrom } from './replay/sniffs.ts';
 import { gResetSeqs, type SampleLmLike } from './rivals/index.ts';
 
 export const USAGE =
@@ -97,8 +110,8 @@ export const USAGE =
 
 /** Files of data/<id>/ in the order pack writes and prints them. */
 export const SET_ORDER = [
-  'manifest.json', 'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'events.jsonl', 'onsets.json', 'calib.json',
-  'clock_report.json', 'verdict.md', 'verdict.json', 'audio_env.json', 'audio.wav',
+  'manifest.json', 'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json', 'events.jsonl', 'onsets.json',
+  'calib.json', 'clock_report.json', 'verdict.md', 'verdict.json', 'audio_env.json', 'audio.wav',
 ] as const;
 
 /** Copied byte for byte when the session has them (spec 8.7). */
@@ -512,19 +525,28 @@ function eventsBefore(complete: string, nCut: number): string {
  * which stage B lays out its steps and cues (analysis/gate/view.ts gateLayout, scoredCues). With
  * `nCut`, those before it, the marks stage A reads (view.ts stampsBefore). A last line a crash cut
  * short is left out, as stream.jsonl leaves it out; a mark line that is not valid stays, for
- * validatePublishedFolder to refuse.
+ * validatePublishedFolder to refuse. Deck writes each mark line as JSON.stringify writes its
+ * fields, and a line that is not so is refused: the checks read parsed values, and a key given
+ * twice would publish its first value, which none of them reads.
  */
 export function marksJsonl(stamps: string, nCut: number | null): string {
-  const kept = splitJsonlLines(splitTruncatedTail(stamps).complete).filter((line) => {
+  const kept: string[] = [];
+  splitJsonlLines(splitTruncatedTail(stamps).complete).forEach((line, i) => {
     let v: unknown;
     try {
       v = JSON.parse(line) as unknown;
     } catch {
-      return false;
+      return;
     }
-    if (!isPlainObject(v) || v['k'] !== 'mark') return false;
+    if (!isPlainObject(v) || v['k'] !== 'mark') return;
     const n = v['n'];
-    return nCut === null || typeof n !== 'number' || n < nCut;
+    if (nCut !== null && typeof n === 'number' && n >= nCut) return;
+    if (JSON.stringify(v) !== line) {
+      throw new PackRefusal(
+        `stamps.jsonl line ${i + 1}: a mark line that is not as Deck writes it, JSON.stringify of its fields (a key given twice, a space or an escape differs). Pack copies mark lines unchanged into marks.jsonl, and a key given twice would publish a value that no check reads. Report the recording as broken with this line number; pack publishes no set of it`,
+      );
+    }
+    kept.push(line);
   });
   return kept.length === 0 ? '' : `${kept.join('\n')}\n`;
 }
@@ -566,6 +588,58 @@ export function gResetsJson(detectorIn: string, samples: string, stream: string,
     );
   }
   return toJsonText({ schema: G_RESETS_SCHEMA, seqs }, null);
+}
+
+/**
+ * sniff_onsets.json of a gate set with its verdict: n_sniff of every sniff stage B heard, found as
+ * stage B finds them (analysis/gate/stage-b.ts): the recording loaded as stage B loads it, laid out
+ * by view.ts gateLayout, and clocks/compute.ts recountSniffLag with the L_rt block and the trace
+ * sign of calib.json. npm run replay recounts row 4 from them with the published stream.jsonl,
+ * marks.jsonl and calib.json (analysis/replay/sniffs.ts sniffRecountFrom), so the file is written
+ * only when that recount gives what recountSniffLag gives on the recording. Otherwise, or when
+ * stage B's layout of the recording fails, the set gets none, a note says why, and replay calls
+ * the values that need it not recomputable.
+ */
+export function sniffOnsetsJson(sessionDir: string, files: ReadonlyMap<string, Buffer>, notes: string[]): string | null {
+  const none = (why: string): null => {
+    notes.push(`the set has no sniff_onsets.json: ${why}, so npm run replay cannot recount row 4, and best_case_ms and d1_on_sniffs_ms read not recomputable from the set`);
+    return null;
+  };
+  const text = (name: string): string | null => files.get(name)?.toString('utf8') ?? null;
+  const streamText = text('stream.jsonl');
+  const marksText = text('marks.jsonl');
+  const calib = parseJson(text('calib.json') ?? '', validateCalib, { file: 'calib.json' }).value;
+  if (streamText === null || marksText === null || calib === null) return none('the recount needs stream.jsonl, marks.jsonl and a valid calib.json in the set');
+  let s: LoadedSession;
+  try {
+    s = loadSession(sessionDir);
+  } catch (e) {
+    if (e instanceof SessionLoadError) return none(`the recording cannot be loaded as stage B loads it (${e.message})`);
+    throw e;
+  }
+  let stageB: SniffRecount;
+  let listening: string;
+  let sign: 1 | -1;
+  try {
+    const layout = gateLayout(s);
+    if (s.calib?.L_rt_ms === undefined || calib.L_rt_ms === undefined) return none('calib.json has no L_rt_ms');
+    sign = signOf(s);
+    stageB = recountSniffLag(s, layout.gate, coreLrtOf(s.calib.L_rt_ms), sign);
+    listening = layout.gate.listening;
+  } catch (e) {
+    if (e instanceof GateRefusal) return none(`stage B's layout of the recording fails (${e.message})`);
+    throw e;
+  }
+  const { inputs, nArrBySeq } = parseStream(streamText);
+  const marks = parseJsonl(marksText, validateMarkLine, { file: 'marks.jsonl' }).rows;
+  const fromSet = sniffRecountFrom({ inputs, nArrBySeq, marks, listening, lrt: coreLrtOf(calib.L_rt_ms), sign }, stageB.onsets);
+  if (!sameJson(fromSet, stageB)) {
+    const what = fromSet.aRef !== stageB.aRef ? 'A_ref of the listening block' : 'the sniff lag';
+    return none(
+      `recounted from the published stream.jsonl, marks.jsonl and calib.json with the onsets stage B finds, ${what} is not what recountSniffLag gives on samples.jsonl and stamps.jsonl of the recording`,
+    );
+  }
+  return toJsonText({ schema: SNIFF_ONSETS_SCHEMA, onsets: stageB.onsets }, null);
 }
 
 interface BuiltSet {
@@ -768,8 +842,8 @@ export function holdsHomePath(s: string): boolean {
 
 /** Files of a set whose strings are scanned: every file but manifest.json, which has its own checks, and audio.wav. */
 const SCANNED_FILES = [
-  'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json', 'verdict.md',
-  'verdict.json', 'audio_env.json',
+  'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'sniff_onsets.json', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json',
+  'verdict.md', 'verdict.json', 'audio_env.json',
 ] as const;
 
 /**
@@ -984,6 +1058,11 @@ export function runPack(args: PackArgs, deps: PackDeps): number {
     throw new PackRefusal(`a file of ${id} does not match the hash recorded for it, so nothing is published (spec 8.5):\n  ${integrity.join('\n  ')}`);
   }
   const set = buildSet(publishedManifest(manifest, args.aliases), sources, args, cutOf(plan));
+  if (plan.mode === 'append') {
+    // A gate set with its verdict: the sniff onsets of row 4 for npm run replay.
+    const sniffs = sniffOnsetsJson(sessionDir, set.files, set.notes);
+    if (sniffs !== null) set.files.set('sniff_onsets.json', Buffer.from(sniffs, 'utf8'));
+  }
   set.notes.unshift(...integrityNotes, ...(plan.mode === 'skip' ? plan.notes : []));
   const texts: Record<string, string | null> = {};
   for (const [name, bytes] of set.files) texts[name] = name === 'audio.wav' ? null : bytes.toString('utf8');

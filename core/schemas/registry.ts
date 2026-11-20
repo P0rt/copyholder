@@ -8,7 +8,7 @@ import { validateFrozenParams, validateScoringRules } from './params.ts';
 import { validateFreezeManifest, validateSealedPlan, validateTexts, validateTimings } from './plan.ts';
 import {
   validateAudioEnv, validateGResets, validateMarkLine, validatePlantedTimes, validatePublishedManifest, validateSentenceEnds,
-  validateStreamLine,
+  validateSniffOnsets, validateStreamLine,
 } from './published.ts';
 import { validateReceipt } from './receipt.ts';
 import {
@@ -63,6 +63,7 @@ export const FILE_FORMATS: Readonly<Record<string, FileFormat>> = {
   'planted_times.json': json(validatePlantedTimes, '8.7'),
   'marks.jsonl': jsonl(validateMarkLine, '8.7'),
   'g_resets.json': json(validateGResets, '8.7'),
+  'sniff_onsets.json': json(validateSniffOnsets, '8.7'),
   'data/manifest.json': json(validatePublishedManifest, '8.7'),
 };
 
