@@ -310,7 +310,7 @@ export function readErrorSpecs(value: unknown): SampleErrorSpec[] {
     const { error_id, passage_id, class: cls, sentence_index, replacement, original_span } = e;
     if (typeof error_id !== 'string' || !/^sample-e[1-9][0-9]*$/.test(error_id)) throw new Error(`plan.json: error ${k} has no error_id like sample-e1`);
     if (!SAMPLE_PASSAGE_IDS.includes(passage_id as SamplePassageId)) throw new Error(`plan.json: ${error_id} names no sample passage`);
-    if (!SAMPLE_ERROR_CLASSES.includes(cls as SampleErrorClass)) throw new Error(`plan.json: ${error_id} has class ${String(cls)}, expected one of ${SAMPLE_ERROR_CLASSES.join(', ')}`);
+    if (!SAMPLE_ERROR_CLASSES.includes(cls as SampleErrorClass)) throw new Error(`plan.json: ${error_id} has a class other than ${SAMPLE_ERROR_CLASSES.join(', ')}`); // the value stays out: the output is blind (build.ts)
     if (!Number.isInteger(sentence_index) || (sentence_index as number) < 0) throw new Error(`plan.json: ${error_id} has no sentence_index`);
     if (typeof replacement !== 'string' || typeof original_span !== 'string') throw new Error(`plan.json: ${error_id} needs replacement and original_span`);
     return {

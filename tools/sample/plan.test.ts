@@ -211,7 +211,14 @@ describe('samplePlanProblems', () => {
   it('reads only the hand-written fields of each error, and refuses a malformed one', () => {
     const s = syntheticSample();
     expect(readErrorSpecs({ errors: s.specs.map((e) => ({ ...e, word_start: 1 })) })).toEqual(s.specs);
-    expect(() => readErrorSpecs({ errors: [{ ...s.specs[0], class: 'sense' }] })).toThrow(/class sense/);
+    let classMessage = '';
+    try {
+      readErrorSpecs({ errors: [{ ...s.specs[0], class: 'sense' }] });
+    } catch (e) {
+      classMessage = (e as Error).message;
+    }
+    expect(classMessage).toMatch(/^plan\.json: sample-e1 has a class other than number, negation, swapped_fact/);
+    expect(classMessage).not.toContain('sense');
     expect(() => readErrorSpecs({ errors: [{ ...s.specs[0], passage_id: 'opening ' }] })).toThrow(/names no sample passage/);
     expect(() => readErrorSpecs({ errors: [{ ...s.specs[0], error_id: 'e1' }] })).toThrow(/error_id like sample-e1/);
     expect(() => readErrorSpecs({})).toThrow(/errors is not an array/);
