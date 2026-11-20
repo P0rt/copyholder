@@ -394,6 +394,8 @@ Every number carries its n and the setup line: one person, one setup, the SDK ve
 
 **Demo takes.** At most three live takes of `npm run headstart` on the public sample text in `sample/`, with the frozen parameters, the trace sign from three paced deep breaths at the start and the audio safety stop on. They are not confirmatory and have no sealed plan. The first take with at least one `CHEST` stop made while no voice was on and followed by the participant's voice within 1.5 s, by Deck's voice edges, is published; if no take qualifies, the last one is.
 
+**Order and credits.** The camera runs on the free SDK credits: about 94 were left before pack 0, by the camera minutes used so far, at 2.0 to 2.4 credits a minute *(assumption: no other use)*. The order is therefore pack 0, pack A, the tuning and `gate-retune`, pack B, one demo take, then pack C; a second or third demo take only with credits left after pack C. A recording that the SDK ends with `kCreditExhausted` is lost, reported with its reason and not replaced. If pack C is lost or cannot be started for lack of credits, the confirmatory numbers are those of pack B alone (at most 14 valid objections), flagged, with the same tests.
+
 ## Placeholders
 
 Each placeholder in double braces above is replaced by its value before the tag, and the tag is set only when none is left; `npm run freeze -- gate-prereg` refuses otherwise. The names below are written without braces.
