@@ -1,6 +1,6 @@
 # Privacy notice
 
-> **First version, 12 November 2026.** A short version, in place before the first run of the SmartSpectra SDK. It will be completed by 19 November 2026.
+> **Version of 20 November 2026.** The first version, of 12 November 2026, was in place before the first run of the SmartSpectra SDK. This version lists the files passed to the AI assistant so far. Every change is in the git history of this file.
 
 Copyholder is an open-source app by the author of this repository (below: the author), made for the DEV Presage SmartSpectra SDK Challenge (November 2026). It is not a Presage product. This notice covers the app, the judge page built from it and the recordings the author publishes here. Section 30.1 of the Presage Terms of Service asks every app built on the SDK to give its users such a notice. Terms of use: [TERMS.md](TERMS.md).
 
@@ -66,7 +66,7 @@ The app deletes nothing by itself: files stay until you delete them.
 - `npm run purge -- <id> --raw` deletes only `sdk_raw.jsonl.gz`.
 - `npm run purge -- <id>` deletes the whole session folder. It deletes the sealed folder of a plan listed in `freeze_manifest.json` only after `reveal` and `pack`, and refuses otherwise; for `pilot` and `rehearsal`, after `reveal`.
 - Both delete files on the computer only. They do not touch the published set or files already passed to the AI assistant.
-- **Retention of the author's recordings:** `sdk_raw.jsonl.gz` is deleted right after the post is published on 22 November 2026. All other recordings on the Mac are kept until the winners are announced on 10 December 2026, then deleted. If you run the app yourself, you choose when to delete yours.
+- **Retention of the author's recordings:** `sdk_raw.jsonl.gz` is deleted right after the post is published (by 23 November 2026). All other recordings on the Mac are kept until the winners are announced on 10 December 2026, then deleted. If you run the app yourself, you choose when to delete yours.
 
 ## What is published
 
@@ -83,7 +83,7 @@ A set is published for every recording that a number or claim in the post rests 
 - **Never published:** face point coordinates, `sdk_raw.jsonl.gz`, `samples.jsonl`, `tap.log`. The app keeps no camera frames.
 - **Always published:** the changed sentences, since the seal cannot be checked without them. In the sessions for numbers each one reveals a sentence of the author's own draft.
 - **Device names** appear as the system shows them and may contain a person's name. `pack` prints them and waits for confirmation; a neutral name can replace them.
-- **Off by default:** `--with-audio` (both channels of a session), `--with-clips` (two-second voice clips around each objection), `--with-texts` (full texts). Each needs the author's explicit yes for one session. The full version of this notice names each use.
+- **Off by default:** `--with-audio` (both channels of a session), `--with-clips` (two-second voice clips around each objection), `--with-texts` (full texts). Each needs the author's explicit yes for one session, and each use is named in this notice.
 - **No recall:** a published file stays in the git history and in other people's copies. The challenge rules give the organizer a perpetual, irrevocable license to the submission materials; as the author reads them, that includes the demo video (the author's voice and, unless the preview is removed, face) and the records in this repository.
 
 ## What goes to the AI assistant
@@ -102,7 +102,14 @@ The author builds and analyses the project with an AI assistant (Claude, by Anth
 - A file passed to the assistant stays in its cloud session; `purge` on the Mac does not delete it.
 - If Kokoro runs in the cloud session, the assistant renders there the narrator audio for public texts: the first-day check sets and the judge sample. The author's drafts and the texts whose plan is hidden from the author (no-camera listening, rehearsal, space-bar block, demo takes) are voiced on the Mac by `npm run plant`.
 - In the app, the model that plants the errors and the narrator's voice run locally. The app itself sends no draft text and no measurement to an AI service; the SDK's transfer above is separate.
-- **Files passed so far:** none as of this first version (12 November 2026). Each file is added to this list by name when it is passed, and the list is checked against the conversation before the post is published.
+- **Files passed so far.** Each file is added to this list by name when it is passed, and the list is checked against the conversation before the post is published. All reads below were on 20 November 2026, by the assistant running commands on the Mac, and all are development recordings, which are not published:
+  - `doctor-1`, `doctor-2`: `manifest.json`, `events.jsonl`, `stamps.jsonl`, `calib.json`; `audio.wav` through the repository's loop check analysis, which printed only the delay and level of each click.
+  - `doctor-3`: `manifest.json`, `events.jsonl`, `stamps.jsonl`, `calib.json`; `audio.wav` through the same analysis and a one-off check of the microphone channel's peak and clipped samples, numbers only.
+  - `smoke-1`: `events.jsonl`.
+  - `smoke-2`: `manifest.json`, `events.jsonl`, `stamps.jsonl`, `tap.log`; `samples.jsonl`, of which a few lines around the SDK's status and error messages were printed, and from which the repository's analysis gave the breathing trace medians and the shares of SDK statuses; `audio.wav` was loaded by that analysis, and nothing from it was used.
+  - For every session above: the file list with sizes and times, and the terminal output of the run.
+  - Not read: `sdk_raw.jsonl.gz`, `detector_in.jsonl`, any sealed folder, and `.env`, which was only checked for a line that holds a key.
+  - The reads of `audio.wav` and `samples.jsonl` above came before the author's yes. The author gave it afterwards, on 20 November 2026, for these reads and for the files of the technical runs that follow (`doctor`, `smoke` and pack 0 of the first-day check), for debugging. Packs A, B and C and the demo takes need a separate yes.
 
 ## The judge page
 
@@ -111,7 +118,7 @@ The judge page (GitHub Pages, or `127.0.0.1` through `npm run judge` or the rele
 ## The API key and transcripts
 
 - The Presage API key is kept only in `.env` in the local clone, as `SMARTSPECTRA_API_KEY`. `.env` is excluded from git; the repository has `.env.example`. Only `tap` reads the key. A test looks for `.env` in the tree and the git history, and on the Mac also for the key's value. Non-secret settings, such as the camera name, which may contain a person's name, live in `settings.env`, also excluded from git.
-- The key never goes to the AI assistant. Do not paste it into a chat, an issue or a commit. After the post is published on 22 November 2026, the author reissues the key on the Presage developer portal.
+- The key never goes to the AI assistant. Do not paste it into a chat, an issue or a commit. After the post is published, the author reissues the key on the Presage developer portal.
 - A transcript of the assistant's session goes into the post only after a check for the key, personal paths, names and draft text; the same check covers video frames and screenshots. An uploaded session stays hidden until Make Public is pressed.
 
 ## Questions, requests and withdrawing consent

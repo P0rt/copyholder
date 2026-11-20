@@ -1,6 +1,6 @@
 # Terms of use
 
-> **First version, 12 November 2026.** A short version, in place before the first run of the SmartSpectra SDK. It will be completed by 19 November 2026.
+> **Version of 20 November 2026.** The first version, of 12 November 2026, was in place before the first run of the SmartSpectra SDK. These terms stand as written; every change is in the git history of this file.
 
 These terms cover the use of Copyholder: the app in this repository, the judge page built from it and the data published in `data/` and `results/`. Copyholder is an open-source project by the author of this repository (below: the author), made for the DEV Presage SmartSpectra SDK Challenge (November 2026). It is not a Presage product. By running the app or using the judge page you accept these terms. How data is handled is described in [PRIVACY.md](PRIVACY.md).
 
