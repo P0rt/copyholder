@@ -428,11 +428,12 @@ export function whyNotInGit(path: string): string | null {
 
 /**
  * Record kinds whose records get a published set: the day-1 gate, every started numbers
- * session (cancelled and interrupted ones too), the space-bar block and every demo take.
+ * session (cancelled and interrupted ones too), the space-bar block, every demo take, and
+ * every headstart take (the demo takes of PREREG section 11).
  * Development records get none: doctor, smoke, the probe before the gate (pack 0), pilot,
- * rehearsal (spec 8.7), and the development runs headstart, live_from and live_sim (assumption).
+ * rehearsal (spec 8.7), and the development runs live_from and live_sim (assumption).
  */
-export const PUBLISHED_KINDS: readonly RecordKind[] = ['gate', 'numbers', 'spacebar', 'demo'];
+export const PUBLISHED_KINDS: readonly RecordKind[] = ['gate', 'numbers', 'spacebar', 'demo', 'headstart'];
 
 /** Files only the set of the day-1 gate has (spec 8.7). */
 export const GATE_ONLY_FILES = ['verdict.md', 'verdict.json'] as const;

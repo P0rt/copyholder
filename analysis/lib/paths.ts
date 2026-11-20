@@ -1,5 +1,6 @@
-// Where analysis finds session folders: the rule of live/lib/paths.cjs (spec 8.1).
-// COPYHOLDER_SESSIONS_DIR moves the folder, so tests run against temporary folders.
+// Where analysis finds session folders: the rule of live/lib/paths.cjs (spec 8.1), and where pack
+// writes the published sets (spec 8.7). COPYHOLDER_SESSIONS_DIR and COPYHOLDER_DATA_DIR move the
+// folders, so tests run against temporary folders.
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +15,15 @@ const SESSION_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export function sessionsDir(env: NodeJS.ProcessEnv = process.env): string {
   const v = env['COPYHOLDER_SESSIONS_DIR'];
   return v ? path.resolve(v) : path.join(REPO_ROOT, 'sessions');
+}
+
+/**
+ * data/ of the repository, where pack writes the published sets data/<id>/ (spec 8.7), or
+ * COPYHOLDER_DATA_DIR when set, so tests write into temporary folders.
+ */
+export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const v = env['COPYHOLDER_DATA_DIR'];
+  return v ? path.resolve(v) : path.join(REPO_ROOT, 'data');
 }
 
 /**

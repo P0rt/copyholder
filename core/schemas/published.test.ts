@@ -316,16 +316,31 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
     ]);
   });
 
-  it('a set for the gate, each numbers session, the space-bar block and each demo take; none for development records (spec 8.7)', () => {
-    expect(PUBLISHED_KINDS).toEqual(['gate', 'numbers', 'spacebar', 'demo']);
+  it('a set for the gate, each numbers session, the space-bar block, each demo take and each headstart take; none for development records (spec 8.7)', () => {
+    expect(PUBLISHED_KINDS).toEqual(['gate', 'numbers', 'spacebar', 'demo', 'headstart']);
     for (const kind of RECORD_KINDS) expect(whyNoPublishedSet(kind) === null, kind).toBe(PUBLISHED_KINDS.includes(kind));
     for (const pack of ['A', 'B', 'C', null] as const) expect(whyNoPublishedSet('gate', pack)).toBeNull();
     expect(whyNoPublishedSet('gate', '0')).toBe(
       'the probe before the gate (pack 0) is a development record and gets no published set (spec 8.7, 9.4)',
     );
     expect(checkPublishedNames(['manifest.json', 'events.jsonl'], { kind: 'rehearsal' })).toEqual([
-      'a rehearsal record is a development record and gets no published set: only gate, numbers, spacebar, demo records do (spec 8.7)',
+      'a rehearsal record is a development record and gets no published set: only gate, numbers, spacebar, demo, headstart records do (spec 8.7)',
     ]);
+  });
+
+  it('a headstart take (a demo take of PREREG section 11) gets a set; live_from and live_sim runs get none', () => {
+    expect(whyNoPublishedSet('headstart')).toBeNull();
+    expect(checkPublishedNames(['manifest.json', 'stream.jsonl', 'events.jsonl', 'audio_env.json'], { kind: 'headstart' })).toEqual([]);
+    expect(checkPublishedNames(['manifest.json', 'verdict.md'], { kind: 'headstart' })).toEqual([
+      'verdict.md: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
+    ]);
+    for (const kind of ['live_from', 'live_sim'] as const) {
+      expect(whyNoPublishedSet(kind)).toBe(
+        `a ${kind} record is a development record and gets no published set: only gate, numbers, spacebar, demo, headstart records do (spec 8.7)`,
+      );
+    }
+    const take: Manifest = { ...exampleManifest(), kind: 'headstart', plan_commitment: null };
+    expect(validatePublishedFolder({ 'manifest.json': JSON.stringify(take) })).toEqual([]);
   });
 
   it('validatePublishedFolder takes kind and pack from manifest.json, which every set carries', () => {

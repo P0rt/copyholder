@@ -36,6 +36,8 @@
     "label": "tsx analysis/label.ts",
     "analyze:gate": "tsx analysis/gate.ts",
     "retune": "tsx analysis/retune.ts",
+    "pack": "tsx analysis/pack.ts",
+    "purge": "tsx analysis/purge.ts",
     "confirm": "tsx analysis/confirm.ts",
     "take": "tsx analysis/take.ts",
     "article": "tsx tools/article.ts",
