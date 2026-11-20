@@ -1,0 +1,45 @@
+Copyholder data license
+
+Copyright (c) 2026 the copyright holder named in LICENSE
+
+This license covers the data in the folders data/ and results/ of this repository: the
+published recordings of one person, the author named in LICENSE (chest trace, lip-gap and
+head-motion numbers, event times, voice onsets, loudness envelopes and clock reports), and the
+numbers computed from them.
+
+You may, free of charge:
+
+- copy, share and analyze the data, in whole or in part, in any medium;
+- recompute, check or reproduce the results of this project with them;
+- publish what you find, with excerpts of the data.
+
+On two conditions:
+
+1. Name the source: "Copyholder data", the author as named in LICENSE, and a link to this
+   repository; and say whether you changed the data, and how. For example:
+   "Copyholder data" (data/gate-b/) by <the author named in LICENSE>, from <link to the
+   repository>. Changes: <what you changed, or "none">.
+2. Follow TERMS.md. In particular, do not use the data for medical diagnosis or treatment, to
+   make a decision about any person, or to build or train a product or model that competes
+   with the Presage SmartSpectra SDK.
+
+No other rights are granted. The data are provided "as is", without warranty of any kind, and
+to the extent the law allows the author is not liable for any use of them.
+
+Why not an open data license such as CC BY 4.0: those licenses forbid adding conditions. Part
+of the data is output of the SmartSpectra SDK or computed from it, such as the breathing
+trace, the talking flag, the SDK statuses and the two numbers computed from the face points in
+each stream.jsonl. The Presage Terms of Service (sections 7.1 and 30.1) ask that the SDK's
+output not be used to build a competing product, and that apps built on the SDK forbid
+diagnostic or treatment use. Condition 2 carries those limits over to the data.
+
+What this license does not cover
+
+- The code: the MIT License, see LICENSE.
+- The texts written for the narrator to read, such as those in gate/ and sample/: CC0 1.0,
+  see TERMS.md.
+- The SmartSpectra SDK and its models, which are not part of this repository, and Presage's
+  names and logos. This license gives no right to them.
+
+The data describe one person, the author, recorded with one setup. PRIVACY.md says what the
+published files hold and what was left out of them.
