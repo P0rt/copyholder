@@ -115,7 +115,7 @@ The author builds and analyses the project with an AI assistant (Claude, by Anth
   - `smoke-2`: `manifest.json`, `events.jsonl`, `stamps.jsonl`, `tap.log`; `samples.jsonl`, of which a few lines around the SDK's status and error messages were printed, and from which the repository's analysis gave the breathing trace medians and the shares of SDK statuses; `audio.wav` was loaded by that analysis, and nothing from it was used.
   - For every session above: the file list with sizes and times, and the terminal output of the run.
   - Not read: `sdk_raw.jsonl.gz`, `detector_in.jsonl`, any sealed folder, and `.env`, which was only checked for a line that holds a key.
-  - The reads of `audio.wav` and `samples.jsonl` above came before the author's yes. The author gave it afterwards, on 20 November 2026, for these reads and for the files of the technical runs that follow (`doctor`, `smoke` and pack 0 of the first-day check), for debugging. Packs A, B and C and the demo takes need a separate yes.
+  - The reads of `audio.wav` and `samples.jsonl` above came before the author's yes. The author gave it afterwards, on 20 November 2026, for these reads and for the files of the technical runs that follow (`doctor`, `smoke` and pack 0 of the first-day check), for debugging. Packs A, B and C and the demo takes needed a separate yes. The author gave it on 20 November 2026, before any of them was recorded: the assistant runs the analysis commands on these recordings on the Mac, which load their `audio.wav` and `samples.jsonl`, and their sets are published without audio (no `--with-audio`). Each file of theirs that the assistant reads is added below by name.
 
 ## The API key and transcripts
 
