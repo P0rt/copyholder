@@ -1,4 +1,4 @@
-// npm run pack -- <id> --devices-ok [--alias "<system name>=<published name>"]... [--with-audio <id>] [--replace]
+// npm run pack -- <id> --devices-ok [--alias "<system name>=<published name>"]... [--with-audio <id>] [--blank-home-paths] [--replace]
 //
 // Builds the published set data/<id>/ from sessions/<id>/ (spec 8.7; COPYHOLDER_SESSIONS_DIR moves
 // sessions/, COPYHOLDER_DATA_DIR moves data/). Under PREREG section 11 the records that get a set
@@ -9,10 +9,11 @@
 //
 // The set holds only the files the session has, built as spec 8.7 says: manifest.json without local
 // paths and with the --alias names; stream.jsonl from detector_in.jsonl and the arr stamps of
-// stamps.jsonl; copies of events.jsonl, onsets.json, calib.json and clock_report.json; verdict.md
-// and verdict.json (gate only, once the verdict is in the ledger); audio_env.json, the level of both
-// channels of audio.wav every 10 ms; and audio.wav itself, 16 bit, only with --with-audio. A gate
-// set also gets the files npm run replay recomputes its verdict with (analysis/replay/README.md):
+// stamps.jsonl; copies of events.jsonl (with --blank-home-paths, its paths into a home folder
+// replaced), onsets.json, calib.json and clock_report.json; verdict.md and verdict.json (gate
+// only, once the verdict is in the ledger); audio_env.json, the level of both channels of
+// audio.wav every 10 ms; and audio.wav itself, 16 bit, only with --with-audio. A gate set also
+// gets the files npm run replay recomputes its verdict with (analysis/replay/README.md):
 // marks.jsonl, the "mark" lines of stamps.jsonl as they are (sample numbers, cue numbers and step
 // names, no text; a line that is not as JSON.stringify writes it is refused), and g_resets.json,
 // the packets stage B reads as reset frames of G, which pack finds as stage B does, with rivals
@@ -27,13 +28,18 @@
 // validatePublishedFolder and scanned for what the manifest keeps private (a path into a home
 // folder, as an SDK error message can hold, and the system name of a device that --alias
 // replaces) before anything is written, then written into a temporary folder beside data/<id>/
-// and renamed.
+// and renamed. A set that holds either is refused. Only --blank-home-paths rewrites a file: it
+// replaces the paths into a home folder in events.jsonl before those checks (blankHomePaths).
 //
 // --devices-ok      the device and machine names printed are fine as they stand in the published
 //                   manifest. Without it pack prints them and writes nothing (exit 1).
 // --alias "a=b"     replaces the system name a by b in those device and machine names only
 //                   (repeatable); a manifest field outside them that still holds a is refused.
 // --with-audio <id> also publishes audio.wav; the value repeats the session id as confirmation.
+// --blank-home-paths replaces each path into a home folder in the strings of events.jsonl, such
+//                   as an SDK or tap error message, by "<home path>", and adds a note naming the
+//                   line and field of each, never the path. Without it such a path refuses the set;
+//                   in any other file it always does, as pack rewrites no other file.
 // --replace         writes the set again over an existing data/<id>/ (swapped in by renames).
 //
 // Ledger (spec 8.5): a gate record needs its quickcheck step. When the step order allows `pack`
@@ -106,7 +112,7 @@ import { sniffRecountFrom } from './replay/sniffs.ts';
 import { gResetSeqs, type SampleLmLike } from './rivals/index.ts';
 
 export const USAGE =
-  'usage: npm run pack -- <id> --devices-ok [--alias "<system name>=<published name>"]... [--with-audio <id>] [--replace]';
+  'usage: npm run pack -- <id> --devices-ok [--alias "<system name>=<published name>"]... [--with-audio <id>] [--blank-home-paths] [--replace]';
 
 /** Files of data/<id>/ in the order pack writes and prints them. */
 export const SET_ORDER = [
@@ -132,6 +138,8 @@ export interface PackArgs {
   aliases: [string, string][];
   /** Value of --with-audio: must repeat the session id. */
   withAudio: string | null;
+  /** --blank-home-paths: paths into a home folder in events.jsonl are replaced (blankHomePaths). */
+  blankHomePaths: boolean;
   replace: boolean;
 }
 
@@ -139,6 +147,7 @@ export interface PackArgs {
 export function parsePackArgs(argv: readonly string[]): PackArgs | string {
   let id: string | null = null;
   let devicesOk = false;
+  let blankHomePaths = false;
   let replace = false;
   let withAudio: string | null = null;
   const aliases: [string, string][] = [];
@@ -154,9 +163,10 @@ export function parsePackArgs(argv: readonly string[]): PackArgs | string {
       i++;
       return next;
     };
-    if (flag === '--devices-ok' || flag === '--replace') {
+    if (flag === '--devices-ok' || flag === '--blank-home-paths' || flag === '--replace') {
       if (inline !== null) return `${flag} takes no value`;
       if (flag === '--devices-ok') devicesOk = true;
+      else if (flag === '--blank-home-paths') blankHomePaths = true;
       else replace = true;
     } else if (flag === '--with-audio') {
       if (withAudio !== null) return '--with-audio is given twice';
@@ -181,7 +191,7 @@ export function parsePackArgs(argv: readonly string[]): PackArgs | string {
     }
   }
   if (id === null) return 'the session id is required (e.g. gate-b or headstart-1)';
-  return { id, devicesOk, aliases, withAudio, replace };
+  return { id, devicesOk, aliases, withAudio, blankHomePaths, replace };
 }
 
 export interface PackDeps {
@@ -650,7 +660,9 @@ interface BuiltSet {
 /**
  * The files of data/<id>/ from the sources (spec 8.7), in memory. With `cut` (part B held back)
  * stream.jsonl, marks.jsonl, g_resets.json, events.jsonl, audio_env.json and audio.wav end before
- * that sample, and onsets.json stays out.
+ * that sample, and onsets.json stays out. With --blank-home-paths the paths into a home folder in
+ * events.jsonl are replaced here, so every check after it and the pack step's hashes see the
+ * file as it is published.
  */
 function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: number | null): BuiltSet {
   const notes: string[] = [];
@@ -695,8 +707,8 @@ function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: nu
     if (tail.tail !== null) {
       notes.push(`events.jsonl line ${String(tail.tailLine)}: partial last line dropped (no newline, not valid JSON: the recording was cut off)`);
     }
-    if (cut !== null) files.set('events.jsonl', Buffer.from(eventsBefore(tail.complete, cut), 'utf8'));
-    else files.set('events.jsonl', tail.tail !== null ? Buffer.from(tail.complete, 'utf8') : events);
+    const kept = cut !== null ? Buffer.from(eventsBefore(tail.complete, cut), 'utf8') : tail.tail !== null ? Buffer.from(tail.complete, 'utf8') : events;
+    files.set('events.jsonl', args.blankHomePaths ? blankHomePaths(kept, notes) : kept);
   }
   for (const name of [...COPIED_FILES, ...VERDICT_FILES]) {
     const b = source(name);
@@ -830,14 +842,96 @@ export function aliasLeaks(m: Manifest, aliases: readonly [string, string][]): s
   return out;
 }
 
-/** A home folder in a path (/Users/<name>, /home/<name>, ~/, \Users\, a drive letter): it can show the account name. */
-const HOME_PATH = /\/Users\/|\/home\/|\\Users\\|(?:^|[^\w.~-])~\/|(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]/;
+/**
+ * A home folder in a path (/Users/<name>, /home/<name>, ~/, \Users\, a drive letter): it can show
+ * the account name. What may stand before ~/ or a drive letter is a lookbehind, so that a match
+ * starts where the path starts (blankHomePathsIn).
+ */
+const HOME_PATH = /\/Users\/|\/home\/|\\Users\\|(?<![\w.~-])~\/|(?<![A-Za-z0-9])[A-Za-z]:[\\/]/;
 /** Web addresses, left out before HOME_PATH is tried: their paths are no folders of the computer. */
 const WEB_URL = /\b(?:https?|wss?):\/\/[^\s"'<>]*/gi;
 
 /** True when a string holds a path into a home folder; URL paths such as "/" and web addresses pass. */
 export function holdsHomePath(s: string): boolean {
   return HOME_PATH.test(s.replace(WEB_URL, ' '));
+}
+
+/** What --blank-home-paths puts in place of each path into a home folder in events.jsonl. */
+export const HOME_PATH_BLANK = '<home path>';
+/** A path into a home folder ends at white space or a quote, or with the string. */
+const PATH_END = /[\s"'`]/;
+
+/**
+ * `s` with each path into a home folder replaced by HOME_PATH_BLANK, from where HOME_PATH matches
+ * to the end of the path; web addresses stay, as holdsHomePath skips them. `count` is the number
+ * of paths replaced. The result is gone over again until it holds none, so that holdsHomePath
+ * passes every string this returns.
+ */
+export function blankHomePathsIn(s: string): { text: string; count: number } {
+  let text = s;
+  let count = 0;
+  for (;;) {
+    const urls = [...text.matchAll(WEB_URL)].map((m) => [m.index, m.index + m[0].length] as const);
+    const home = new RegExp(HOME_PATH.source, 'g');
+    let out = '';
+    let from = 0;
+    let found = 0;
+    for (let m = home.exec(text); m !== null; m = home.exec(text)) {
+      const at = m.index;
+      if (urls.some(([a, b]) => at >= a && at < b)) continue;
+      let end = at + m[0].length;
+      while (end < text.length && !PATH_END.test(text.charAt(end))) end++;
+      out += `${text.slice(from, at)}${HOME_PATH_BLANK}`;
+      from = end;
+      home.lastIndex = end;
+      found++;
+    }
+    if (found === 0) return { text, count };
+    text = `${out}${text.slice(from)}`;
+    count += found;
+  }
+}
+
+/** `value` with blankHomePathsIn applied to every string in it (keys are not read); `fields` gets the field of each path replaced, named as stringsIn names it. */
+function blankStrings(value: unknown, at: string, fields: string[]): unknown {
+  if (typeof value === 'string') {
+    const r = blankHomePathsIn(value);
+    for (let k = 0; k < r.count; k++) fields.push(at === '' ? '(value)' : at);
+    return r.text;
+  }
+  if (Array.isArray(value)) return value.map((x, i) => blankStrings(x, `${at}[${i}]`, fields));
+  if (isPlainObject(value)) return Object.fromEntries(Object.entries(value).map(([k, x]) => [k, blankStrings(x, at === '' ? k : `${at}.${k}`, fields)]));
+  return value;
+}
+
+/**
+ * events.jsonl with each path into a home folder in its strings replaced by HOME_PATH_BLANK, the
+ * one rewrite pack makes, and only with --blank-home-paths. tap blanks out only the API key of an
+ * SDK or tap error message (live/tap.cjs redact), host writes the message into events.jsonl
+ * (live/host.cjs onSdkError), and a file error names its absolute path. A line that holds such a
+ * path is written again as JSON.stringify writes it, as host writes every line; the other lines
+ * stay byte for byte. Each path replaced adds a note naming the line, numbered as privateStrings
+ * numbers it, and the field, never the path. Without such a path the bytes come back as they are.
+ */
+export function blankHomePaths(events: Buffer, notes: string[]): Buffer {
+  let changed = false;
+  const lines = events.toString('utf8').split('\n').map((raw, i) => {
+    const bom = i === 0 && raw.charCodeAt(0) === 0xfeff ? raw.charAt(0) : '';
+    const cr = raw.endsWith('\r') ? '\r' : '';
+    let value: unknown;
+    try {
+      value = JSON.parse(raw.slice(bom.length, raw.length - cr.length));
+    } catch {
+      return raw; // validatePublishedFolder refuses a line that is not JSON
+    }
+    const fields: string[] = [];
+    const blanked = blankStrings(value, '', fields);
+    if (fields.length === 0) return raw;
+    changed = true;
+    for (const f of fields) notes.push(`events.jsonl line ${i + 1}, ${f}: a path into a home folder is replaced by "${HOME_PATH_BLANK}" (--blank-home-paths)`);
+    return `${bom}${JSON.stringify(blanked)}${cr}`;
+  });
+  return changed ? Buffer.from(lines.join('\n'), 'utf8') : events;
 }
 
 /** Files of a set whose strings are scanned: every file but manifest.json, which has its own checks, and audio.wav. */
@@ -851,17 +945,19 @@ const SCANNED_FILES = [
  * (an SDK error message can hold one, live/host.cjs onSdkError) or the system name of a device
  * that --alias replaces. A name published as confirmed (--devices-ok, no alias) is in manifest.json
  * anyway, so it passes. The files are copied unchanged (spec 8.7), so pack refuses rather than
- * edit them. Names file, line and field (JSON) or line (verdict.md), never the string itself.
+ * edit them; the one exception is events.jsonl, whose paths into a home folder --blank-home-paths
+ * replaces before this scan (blankHomePaths), so such a path found there names the option. Names
+ * file, line and field (JSON) or line (verdict.md), never the string itself.
  */
 export function privateStrings(files: ReadonlyMap<string, Buffer>, m: Manifest, aliases: readonly [string, string][]): string[] {
   const replaced = aliasedNames(m, aliases);
   const out: string[] = [];
-  const check = (where: string, s: string): void => {
-    if (holdsHomePath(s)) out.push(`${where}: holds a path into a home folder, which can show the account name`);
+  const check = (where: string, s: string, hint = ''): void => {
+    if (holdsHomePath(s)) out.push(`${where}: holds a path into a home folder, which can show the account name${hint}`);
     for (const r of replaced) if (s.includes(r.name)) out.push(`${where}: holds the system name of ${r.paths}, which --alias replaces`);
   };
-  const checkJson = (where: string, value: unknown): void => {
-    for (const { path: at, s } of stringsIn(value)) check(`${where}, ${at}`, s);
+  const checkJson = (where: string, value: unknown, hint = ''): void => {
+    for (const { path: at, s } of stringsIn(value)) check(`${where}, ${at}`, s, hint);
   };
   for (const name of SCANNED_FILES) {
     const bytes = files.get(name);
@@ -870,9 +966,10 @@ export function privateStrings(files: ReadonlyMap<string, Buffer>, m: Manifest, 
     if (name.endsWith('.md')) {
       text.split('\n').forEach((line, i) => check(`${name} line ${i + 1}`, line));
     } else if (name.endsWith('.jsonl')) {
+      const hint = name === 'events.jsonl' ? `; --blank-home-paths replaces it by "${HOME_PATH_BLANK}"` : '';
       splitJsonlLines(text).forEach((line, i) => {
         try {
-          checkJson(`${name} line ${i + 1}`, JSON.parse(line));
+          checkJson(`${name} line ${i + 1}`, JSON.parse(line), hint);
         } catch {
           // validatePublishedFolder refuses a line that is not JSON
         }
@@ -1071,7 +1168,7 @@ export function runPack(args: PackArgs, deps: PackDeps): number {
   const leaked = privateStrings(set.files, manifest, args.aliases);
   if (leaked.length > 0) {
     throw new PackRefusal(
-      `the set for data/${id}/ would publish what the manifest keeps private (spec 8.7, PRIVACY.md); the files are copied as they are, so pack does not rewrite them:\n  ${capped(leaked).join('\n  ')}`,
+      `the set for data/${id}/ would publish what the manifest keeps private (spec 8.7, PRIVACY.md); pack copies the files as they are, and only --blank-home-paths rewrites one of them, events.jsonl:\n  ${capped(leaked).join('\n  ')}`,
     );
   }
 

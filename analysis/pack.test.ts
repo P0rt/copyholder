@@ -39,7 +39,7 @@ import { nextRecordingAdvice } from './gate/inputs.ts';
 import { sha256Hex } from './lib/ledger.ts';
 import { gateSteps } from './lib/steps.ts';
 import { encodeStereoFloatWav, readWavHeader } from './lib/wav.ts';
-import { SET_ORDER, gResetsJson, holdsHomePath, main, marksJsonl, parsePackArgs, type PackDeps } from './pack.ts';
+import { SET_ORDER, blankHomePathsIn, gResetsJson, holdsHomePath, main, marksJsonl, parsePackArgs, type PackDeps } from './pack.ts';
 import { ENV_STEP_FRAMES, SILENCE_DB, levelDb, readSessionAudio } from './pack/audio.ts';
 import { formatBytes, whyNoSet, whyNotMeasured } from './pack/rules.ts';
 import { gResetSeqs, type SampleLmLike } from './rivals/index.ts';
@@ -350,14 +350,15 @@ function headstart(id = 'headstart-1', o: Partial<RecordingOptions> = {}): Recor
 
 describe('pack command line', () => {
   it('parses the flags; --alias repeats and splits at the first "="', () => {
-    expect(parsePackArgs(['gate-b', '--devices-ok', '--alias', 'A=B=C', '--alias=X=Y', '--with-audio', 'gate-b', '--replace'])).toEqual({
+    expect(parsePackArgs(['gate-b', '--devices-ok', '--alias', 'A=B=C', '--alias=X=Y', '--with-audio', 'gate-b', '--blank-home-paths', '--replace'])).toEqual({
       id: 'gate-b',
       devicesOk: true,
       aliases: [['A', 'B=C'], ['X', 'Y']],
       withAudio: 'gate-b',
+      blankHomePaths: true,
       replace: true,
     });
-    expect(parsePackArgs(['headstart-1'])).toEqual({ id: 'headstart-1', devicesOk: false, aliases: [], withAudio: null, replace: false });
+    expect(parsePackArgs(['headstart-1'])).toEqual({ id: 'headstart-1', devicesOk: false, aliases: [], withAudio: null, blankHomePaths: false, replace: false });
   });
 
   it.each([
@@ -373,6 +374,7 @@ describe('pack command line', () => {
     [['gate-b', '--alias', 'Mic='], 'expected "<system name>=<published name>"'],
     [['gate-b', '--alias', 'Mic=A', '--alias', 'Mic=B'], 'is given twice'],
     [['gate-b', '--devices-ok=yes'], '--devices-ok takes no value'],
+    [['gate-b', '--blank-home-paths=yes'], '--blank-home-paths takes no value'],
   ])('usage error for %j: exit 2, nothing read or written', async (argv, message) => {
     const r = await pack(argv as string[]);
     expect(r.code).toBe(2);
@@ -577,16 +579,78 @@ describe('device names (spec 8.7)', () => {
 describe('strings of the set that the manifest keeps private (spec 8.7, PRIVACY.md)', () => {
   const sdkError = (message: string): object => ({ n: 9000000, e: 'sdk_error', code: 5, name: 'kError', message });
 
-  it('refuses a path into a home folder in events.jsonl (an SDK error message), naming file, line and field but not the text', async () => {
+  /** The head of the refusal: what pack rewrites, and with which option. */
+  const leakHead = (id: string): string =>
+    `pack refused: the set for data/${id}/ would publish what the manifest keeps private (spec 8.7, PRIVACY.md); pack copies the files as they are, and only --blank-home-paths rewrites one of them, events.jsonl:\n`;
+
+  it('refuses a path into a home folder in events.jsonl (an SDK error message), naming file, line and field but not the text, and the option that replaces it', async () => {
     headstart('headstart-1', { events: [...exampleEvents(), sdkError('could not open /Users/someone/copyholder/live/node_modules/x/graph.binarypb')] });
     const r = await pack(['headstart-1', ...OK]);
     expect(r.code).toBe(1);
     expect(r.err).toEqual([
-      'pack refused: the set for data/headstart-1/ would publish what the manifest keeps private (spec 8.7, PRIVACY.md); the files are copied as they are, so pack does not rewrite them:\n' +
-        '  events.jsonl line 5, message: holds a path into a home folder, which can show the account name',
+      `${leakHead('headstart-1')}  events.jsonl line 5, message: holds a path into a home folder, which can show the account name; --blank-home-paths replaces it by "<home path>"`,
     ]);
     expect(r.all.includes('someone')).toBe(false);
     expectNothingWritten('headstart-1');
+  });
+
+  it('--blank-home-paths replaces each path into a home folder in events.jsonl by "<home path>", with a note per path that never shows it; the set validates and the pack step hashes the file as published', async () => {
+    const message = "could not open '/Users/someone/copyholder/live/node_modules/x/graph.binarypb', see ~/Library/Logs/x.log or https://example.org/Users/help";
+    const g = writeGate({
+      id: 'gate-b',
+      pack: 'B',
+      stage: 'verdict',
+      events: [...exampleEvents(), sdkError(message), { ...sdkError('kError'), detail: { tried: ['/opt/x', 'C:\\Users\\someone\\x'] } }],
+    });
+    const r = await pack(['gate-b', ...OK, '--blank-home-paths']);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    // One note per path replaced: file, line and field, never the path.
+    const note = (where: string): string => `note: events.jsonl ${where}: a path into a home folder is replaced by "<home path>" (--blank-home-paths)`;
+    expect(r.out.filter((l) => l.includes('home folder'))).toEqual([note('line 5, message'), note('line 5, message'), note('line 6, detail.tried[1]')]);
+    expect(r.all.includes('someone')).toBe(false);
+    // Only the paths change; the web address and the other lines stay as the session holds them.
+    const published = fs.readFileSync(path.join(setDir('gate-b'), 'events.jsonl'));
+    const lines = splitJsonlLines(published.toString('utf8'));
+    const session = splitJsonlLines(fs.readFileSync(path.join(g.dir, 'events.jsonl'), 'utf8'));
+    expect(lines).toHaveLength(session.length);
+    expect(lines.slice(0, 4)).toEqual(session.slice(0, 4));
+    expect(lines[4]).toBe(session[4]!.replace('/Users/someone/copyholder/live/node_modules/x/graph.binarypb', '<home path>').replace('~/Library/Logs/x.log', '<home path>'));
+    expect(JSON.parse(lines[4]!)).toEqual(sdkError("could not open '<home path>', see <home path> or https://example.org/Users/help"));
+    expect(JSON.parse(lines[5]!)).toEqual({ ...sdkError('kError'), detail: { tried: ['/opt/x', '<home path>'] } });
+    expect(published.includes('someone')).toBe(false);
+    // The session copy stays as the record step hashed it.
+    expect(sha256Hex(fs.readFileSync(path.join(g.dir, 'events.jsonl')))).toBe(g.hashes['events.jsonl']);
+    expect(validatePublishedFolder(readSet('gate-b'))).toEqual([]);
+    const step = lastLedgerLine(g.ledgerText());
+    expect(step.step).toBe('pack');
+    expect(step.out_sha256['data/gate-b/events.jsonl']).toBe(sha256Hex(published));
+    expect(step.out_sha256['data/gate-b/events.jsonl']).not.toBe(g.hashes['events.jsonl']);
+  });
+
+  it('--blank-home-paths rewrites events.jsonl only: a path into a home folder in any other file still refuses the set', async () => {
+    const rec = headstart('headstart-1', { events: [...exampleEvents(), sdkError('could not open /Users/someone/x')] });
+    fs.writeFileSync(path.join(rec.dir, 'calib.json'), toJsonText({ ...exampleCalib(), note: 'copied from /Users/someone/copyholder' }, 'calib.json', 2));
+    const r = await pack(['headstart-1', ...OK, '--blank-home-paths']);
+    expect(r.code).toBe(1);
+    expect(r.err).toEqual([`${leakHead('headstart-1')}  calib.json, note: holds a path into a home folder, which can show the account name`]);
+    expect(r.all.includes('someone')).toBe(false);
+    expectNothingWritten('headstart-1');
+  });
+
+  it('--blank-home-paths leaves web addresses and URL paths as they are: events.jsonl without a home path is published byte for byte, with no note', async () => {
+    const rec = headstart('headstart-1', {
+      events: [
+        ...exampleEvents(),
+        { n: null, e: 'page_reload', via: '/deck/?id=headstart-1' },
+        sdkError('fetch http://127.0.0.1:5173/home/x failed, see https://example.org/Users/help'),
+      ],
+    });
+    const r = await pack(['headstart-1', ...OK, '--blank-home-paths']);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(r.out.filter((l) => l.includes('home folder'))).toEqual([]);
+    expect(fs.readFileSync(path.join(setDir('headstart-1'), 'events.jsonl'))).toEqual(fs.readFileSync(path.join(rec.dir, 'events.jsonl')));
   });
 
   it('URL paths and web addresses pass, such as page_reload via "/"', async () => {
@@ -620,6 +684,23 @@ describe('strings of the set that the manifest keeps private (spec 8.7, PRIVACY.
     }
     for (const s of ['/', '/deck/', 'http://127.0.0.1:5173/home/x', 'https://example.org/Users/x', 'wss://localhost/home/', '4:15', 'a:b', 'ratio 1:2/3', 'kError']) {
       expect(holdsHomePath(s), s).toBe(false);
+    }
+  });
+
+  it('blankHomePathsIn: from where the home folder path starts to white space, a quote or the end of the string; web addresses stay', () => {
+    for (const [s, text, count] of [
+      ["open '/Users/anna/x/graph.binarypb' failed", "open '<home path>' failed", 1],
+      ['at /home/anna/x y', 'at <home path> y', 1],
+      ['C:\\Users\\anna\\x', '<home path>', 1],
+      ['see ~/Library/x and "D:/data/x"', 'see <home path> and "<home path>"', 2],
+      ['file:///Users/anna/x', 'file://<home path>', 1],
+      ['https://example.org/Users/x then /Users/anna/y', 'https://example.org/Users/x then <home path>', 1],
+      ['fetch http://127.0.0.1:5173/home/x failed', 'fetch http://127.0.0.1:5173/home/x failed', 0],
+      ['4:15 a:b kError /deck/?id=headstart-1', '4:15 a:b kError /deck/?id=headstart-1', 0],
+    ] as const) {
+      const r = blankHomePathsIn(s);
+      expect(r, s).toEqual({ text, count });
+      expect(holdsHomePath(r.text), s).toBe(false);
     }
   });
 });
