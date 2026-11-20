@@ -893,6 +893,63 @@ describe('row 4 recounted from sniff_onsets.json (spec 6.3, 9.6, PREREG §4)', (
   });
 });
 
+describe('row 4 next to its threshold, recounted from sniff_onsets.json (spec 9.6, 9.7)', () => {
+  // Two recordings whose hi median lies within 0.02 ms of 150 ms, one above it and one below, so
+  // that calib.json and verdict.json hold 150.0 for both. Each hi lag is the time from the sound
+  // onset of a sniff to the arrival of its rise in the trace, plus L_rt (core/clock/sniff.ts), so
+  // the SDK-to-Deck latency of the recording and L_rt place the median.
+  const sides = [
+    { name: 'above', latencyMs: [40, 50], lrtMs: 36.1, hiMs: '150.02', outcome: 'BETWEEN', clause: true },
+    { name: 'below', latencyMs: [10, 20], lrtMs: 65.4, hiMs: '149.98', outcome: 'PASS', clause: false },
+  ] as const;
+  const CLAUSE = '; graded on the medians before rounding';
+  const sets = new Map<string, { r: Repo; set: string }>();
+
+  beforeAll(async () => {
+    for (const s of sides) {
+      const r = repo(`edge-${s.name}`);
+      const lrt = { A: s.lrtMs, B: s.lrtMs, rule: 'mean' as const, used: s.lrtMs };
+      const session = await scored(r, 'gate-a', { replies: PLAN, sniffs: true, sniffLag: 'measured', latencyMs: s.latencyMs, lrt });
+      sets.set(s.name, { r, set: publish(session, path.join(root, `edge-${s.name}`, 'data', 'gate-a'), { marks: true, resets: true, sniffs: true }) });
+    }
+  }, 180_000);
+
+  it('takes verdict.md only in the wording stage B gave row 4, graded before rounding above 150 ms and not below: each set is verified (exit 0), and the other wording differs (exit 1)', async () => {
+    for (const s of sides) {
+      const { r, set } = sets.get(s.name)!;
+      const v = JSON.parse(fs.readFileSync(path.join(set, 'verdict.json'), 'utf8')) as Verdict;
+      expect([v.rows.sniff_lag.hi_median_ms, v.rows.sniff_lag.outcome]).toEqual([150, s.outcome]);
+      // Stage B graded the unrounded median, which replay recounts from sniff_onsets.json.
+      const sniff = replayOf(set, r).scored!.scores[0]!.sniff;
+      expect([sniff.gradedOn!.hiMs.toFixed(2), sniff.gradedUnrounded]).toEqual([s.hiMs, s.clause]);
+      const text = fs.readFileSync(path.join(set, 'verdict.md'), 'utf8');
+      expect(text.includes(CLAUSE)).toBe(s.clause);
+
+      const run = replayDeps(r);
+      expect(await main([set], run.deps)).toBe(0);
+      expect(lineOf(run.out, 'rows.sniff_lag.outcome')).toMatch(new RegExp(` ${s.outcome} +${s.outcome} +MATCH$`));
+      expect(lineOf(run.out, 'calib.json sniff_lag_ms')).toMatch(/ ([0-9a-f]{8}) +\1 +MATCH$/);
+      expect(lineOf(run.out, 'verdict.md')).toMatch(/ ([0-9a-f]{8}) +\1 +MATCH$/);
+      expect(last(run.out)).toMatch(/^replay: verified: the verdict and the five row outcomes of the set are recomputed and match, and no recomputed value differs \(\d+ MATCH, 0 DIFFERS, 0 not recomputable from the set, 1 input\)$/);
+
+      // verdict.md in the other wording, verdict.json as stage B wrote it.
+      const flipped = copySet(set, path.join(root, `edge-${s.name}`, 'flipped', 'gate-a'));
+      restateMd(flipped, !s.clause);
+      const other = fs.readFileSync(path.join(flipped, 'verdict.md'), 'utf8');
+      expect(other.includes(CLAUSE)).toBe(!s.clause);
+      const run2 = replayDeps(r);
+      expect(await main([flipped], run2.deps)).toBe(1);
+      expect(lineOf(run2.out, 'verdict.md')).toMatch(/ [0-9a-f]{8} +[0-9a-f]{8} +DIFFERS$/);
+      const [theirs, mine] = [other.split('\n'), text.split('\n')];
+      const i = theirs.findIndex((l, k) => l !== mine[k]);
+      expect(run2.out).toContain(
+        `  note: verdict.md line ${i + 1} reads ${JSON.stringify(theirs[i])}, where stage B writes ${JSON.stringify(mine[i])} from verdict.json (analysis/gate/verdict-text.ts)`,
+      );
+      expect(last(run2.out)).toBe('replay: 1 recomputed value differs from the set: gate-a verdict.md');
+    }
+  });
+});
+
 describe('what a set does not say: OTHER, row 4 and the end of the scored block (spec 9.3, 9.6, 14.4)', () => {
   let r: Repo;
   let set: string;

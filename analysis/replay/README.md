@@ -138,8 +138,8 @@ More lines check other files of the set:
   only says so in a note; this line ties those numbers to the recording. A `calib.json` without a
   sniff block reads as null, so it differs beside a recount that measures a lag: the clocks step
   writes the block whenever it measures one. Each block prints as the first 8 hex digits of the
-  SHA-256 of its JSON; when `calib.json` holds a block the recount does not give, a note gives
-  both;
+  SHA-256 of its JSON. When the recount measures a lag whose block differs from the one
+  `calib.json` holds, a note gives both; when it measures none, the recomputed value reads null;
 - `verdict.md` against the text stage B writes from `verdict.json`; a note quotes the first line
   that differs. Where a median of row 4 sits on a threshold, stage B may add that it graded the
   medians before rounding: with `sniff_onsets.json` replay knows whether it did and takes only
