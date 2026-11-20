@@ -80,6 +80,7 @@ export function deckOptionsFrom(po: DeckProcessorOptions | undefined): DeckOptio
     ...(typeof o.gain === 'number' ? { gain: o.gain } : {}),
     ...(o.vadParams !== undefined ? { vadParams: o.vadParams } : {}),
     ...(typeof o.vadSource === 'string' && o.vadSource !== '' ? { vadSource: o.vadSource } : {}),
+    ...(Number.isSafeInteger(o.levelWindowSamples) && (o.levelWindowSamples as number) > 0 ? { levelWindowSamples: o.levelWindowSamples } : {}),
   };
 }
 
@@ -565,7 +566,7 @@ export class DeckCore {
         this.startClip(st.clip, st.untilClipEnd === true, t);
         break;
       case 'clicks': {
-        // scenarioProblems admitted only CLICK_BLOCKS; the demo block is not in the page's step type yet.
+        // scenarioProblems admitted only CLICK_BLOCKS (a step list may come from outside the page's types).
         const block = st.block as ClickBlock;
         this.clickBlock = block;
         this.clickWave = this.clickWaves[block];

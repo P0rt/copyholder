@@ -10,6 +10,13 @@
   --bad: #c9826f;
   --warn: #c2ad7a;
   --ok: #9fb59a;
+  /* Live view of a take (spec 15.2): stop causes, D1 fires, the level lanes. */
+  --live-chest: #d39a5c;
+  --live-voice: #7fa8d6;
+  --live-key: #b49ad6;
+  --live-fire: #e6e2d8;
+  --live-narrator: #9fb0c2;
+  --live-mic: #9fb59a;
   color-scheme: dark;
 }
 
@@ -341,6 +348,111 @@ code {
   font-size: 0.9rem;
 }
 
+/* Live view of a take (headstart, spec 15.1, 15.2): only plans with liveView mount it. */
+.live {
+  width: min(960px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.live-head {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.live-tag {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.1rem 0.6rem;
+  border: 2px solid var(--rec);
+  border-radius: 4px;
+  color: var(--text);
+}
+
+.live-info {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.live-stage {
+  position: relative;
+}
+
+.live-lanes {
+  display: block;
+  width: 100%;
+  height: 300px;
+}
+
+/* CHEST or VOICE while the narrator is stopped (spec 6.4, 15.1). */
+.live-badge {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  padding: 0.2rem 1rem;
+  border-radius: 6px;
+  font-size: clamp(2rem, 5vw, 3.6rem);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--bg);
+  background: var(--live-chest);
+}
+
+.live-badge[data-cause='voice'] {
+  background: var(--live-voice);
+}
+
+.live-badge[data-cause='key'] {
+  background: var(--live-key);
+}
+
+.live-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.live-detector.active {
+  color: var(--ok);
+}
+
+.live-sign {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.95rem;
+}
+
+.live-summary {
+  font-size: clamp(1.3rem, 3vw, 2rem);
+}
+
+.live-summary p {
+  margin: 0.2rem 0;
+}
+
+/* The square that flashes white on every click (spec 15.4): screen video and audio are aligned on it. */
+.flash {
+  position: fixed;
+  top: 16px;
+  left: 16px;
+  width: 48px;
+  height: 48px;
+  background: #000;
+  z-index: 20;
+}
+
+.flash.on {
+  background: #fff;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -353,5 +465,9 @@ code {
 
   .screen {
     padding: 64px 16px 88px;
+  }
+
+  .live-lanes {
+    height: 220px;
   }
 }

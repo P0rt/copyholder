@@ -29,6 +29,8 @@ export interface RunScreen extends RunView {
   onWaitButton(fn: () => void): void;
   onLevel(fn: (db: number) => void): void;
   devices(settings: HelloSettings): void;
+  /** Adds a panel under the prompt (the live view of a take, web/ui/live-view.ts). */
+  mount(node: Node): void;
 }
 
 export interface PageView {
@@ -181,7 +183,8 @@ export function createPageView(doc: Document): PageView {
         h(doc, 'div', { class: 'meter' }, [outMeter]),
       ]);
       const devicesBox = h(doc, 'dl', { class: 'devices', id: 'devices', hidden: true });
-      set(h(doc, 'section', { class: 'run' }, [prompt, countdown, bar, note, goButton, levels, devicesBox, meters, status]));
+      const section = h(doc, 'section', { class: 'run' }, [prompt, countdown, bar, note, goButton, levels, devicesBox, meters, status]);
+      set(section);
       runText = { prompt, note };
       dot.hidden = false;
 
@@ -246,6 +249,9 @@ export function createPageView(doc: Document): PageView {
         },
         onLevel(fn) {
           levelFn = fn;
+        },
+        mount(node) {
+          section.insertBefore(node, status);
         },
         devices(settings) {
           if (!opts.devicePanel) return;

@@ -3,22 +3,28 @@
 // - Deck stamps and audio blocks -> /session; voice edges and state changes -> detector_in -> step();
 // - events.jsonl: fire, armed, hold, resume, Deck's voice detector parameters, the trace sign and
 //   the page's events; only live mode keeps step() answers;
-// - SDK readiness -> {k:'sdk', tap, ok, note} to the page.
+// - SDK readiness -> {k:'sdk', tap, ok, note} to the page;
+// - live mode: the trace, D1 fires and D1 activity to the page for the live view (spec 15.2);
+//   headstart: the trace sign from the three paced deep breaths (spec 7.11, deep-breath-sign.ts).
 
 import { encodeChunkFrame } from './chk1.ts';
 import { orderKeys, type DetectorInput } from './core.ts';
+import { DEEP_BREATH_SIGN_ERROR, DeepBreathSign } from './deep-breath-sign.ts';
 import { DetectorRunner, PRELIMINARY_DETECTOR, batchFromTapLine, detectorChoice, type DetectorChoice } from './detector-adapter.ts';
 import {
   deckModeOf,
   type DeckMode,
   type DeckStamp,
+  type DetBatch,
   type DetVal,
   type DetectorLine,
+  type DetectorSignEvent,
   type DetectorVariant,
   type EventLine,
   type MainToWorker,
   type NarratorState,
   type TapState,
+  type TracePair,
   type VadEvent,
   type WorkerConfig,
   type WorkerToDeck,
@@ -62,8 +68,19 @@ const WORKER_EVENTS: ReadonlySet<string> = new Set(['fire', 'armed', 'hold', 're
 /** Host mode whose trace sign comes from three cued deep breaths in the run, never from a stored calib (spec 7.11). */
 const SIGN_IN_RUN_MODE = 'headstart';
 const VAD_SOURCES: ReadonlySet<string> = new Set(['options', 'default', 'message']);
+/** Live view: at most one trace point per 1/30 s step of camera time (spec 15.2: the SDK gives about 30). */
+export const LIVE_TRACE_STEP_US = 1e6 / 30;
+/** Live view: a trace point this far before the last one kept starts the grid of steps again. */
+const LIVE_TRACE_RESTART_US = 5e6;
+/** Live view: trace of packets waiting for their arr stamp; older ones are dropped beyond this. */
+const LIVE_TRACE_PENDING_MAX = 256;
 
 type Frame = string | ArrayBuffer;
+interface LiveTrace {
+  sign: 1 | -1;
+  count: number;
+  pts: TracePair[];
+}
 type EventDraft = { e: 'fire'; det: DetectorVariant; seq: number; v: number; theta: number } | { e: 'armed'; det: DetectorVariant; on: boolean };
 
 function isRecord(x: unknown): x is Record<string, unknown> {
@@ -80,6 +97,54 @@ function nonEmpty(x: unknown): string | null {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/** Numbers as JSON can hold them: a value that is not finite becomes null (spec 8.1). */
+function jsonNumbers(xs: readonly number[]): Array<number | null> {
+  return xs.map((x) => (Number.isFinite(x) ? x : null));
+}
+
+/** Camera timestamp of a /tap packet's landmarks (`lm.ts`), null without one. */
+function landmarkTs(line: Record<string, unknown>): number | null {
+  const lm = line.lm;
+  return isRecord(lm) && typeof lm.ts === 'number' && Number.isFinite(lm.ts) ? lm.ts : null;
+}
+
+/** Where the thinning of the live trace stands: a grid of LIVE_TRACE_STEP_US from the first point kept. */
+export interface TraceThinning {
+  /** Camera time of the grid's step 0, us; null before the first point. */
+  originUs: number | null;
+  /** Grid step of the last point kept. */
+  lastStep: number;
+  /** Camera time of the last point kept, us. */
+  lastUs: number;
+}
+
+export function newTraceThinning(): TraceThinning {
+  return { originUs: null, lastStep: Number.NEGATIVE_INFINITY, lastUs: Number.NEGATIVE_INFINITY };
+}
+
+/**
+ * Trace points for the live view: finite pairs, value times sign, at most one per step of the grid
+ * that starts at the first point kept (so a 30 Hz trace keeps every point, a denser one is thinned to
+ * about 30 per second). Points of a step at or before the last one kept are dropped; a point far
+ * before it (a camera clock that started again) starts a new grid. Updates `state`.
+ */
+export function thinTrace(tr: readonly TracePair[], sign: 1 | -1, state: TraceThinning): TracePair[] {
+  const pts: TracePair[] = [];
+  for (const [t, v] of tr) {
+    if (!Number.isFinite(t) || !Number.isFinite(v)) continue;
+    if (state.originUs === null || t < state.lastUs - LIVE_TRACE_RESTART_US) {
+      state.originUs = t;
+      state.lastStep = Number.NEGATIVE_INFINITY;
+    }
+    const step = Math.round((t - state.originUs) / LIVE_TRACE_STEP_US);
+    if (step <= state.lastStep) continue;
+    state.lastStep = step;
+    state.lastUs = t;
+    pts.push([t, v * sign]);
+  }
+  return pts;
 }
 
 /** Sends frames in order; frames sent before the socket opens wait in a queue. */
@@ -110,8 +175,15 @@ export class WorkerCore {
   private inited = false;
   private mode: DeckMode = 'gate';
   private configMode: string | null = null;
-  /** False in headstart until the page sets the sign of this run (spec 7.11). */
+  /** False in headstart until the sign of this run is set (spec 7.11). */
   private signKnown = true;
+  /** headstart: collects the deep breaths until the sign is found or reading starts (spec 7.11); null otherwise. */
+  private signFinder: DeepBreathSign | null = null;
+  /** headstart: the deep breaths gave no sign and the page was told (DEEP_BREATH_SIGN_ERROR). */
+  private signFailed = false;
+  /** Live view: trace of packets that wait for their arr stamp, by seq (live mode only). */
+  private readonly liveTrace = new Map<number, LiveTrace>();
+  private readonly liveThinning = newTraceThinning();
   private logInputs = false;
   private runner: DetectorRunner | null = null;
   private variant: DetectorVariant = 'D1';
@@ -243,6 +315,7 @@ export class WorkerCore {
         if (this.configMode === SIGN_IN_RUN_MODE) {
           choice = { ...choice, sign: 1 };
           this.signKnown = false;
+          this.signFinder = new DeepBreathSign();
         }
         this.beforeReading = [];
       }
@@ -268,8 +341,7 @@ export class WorkerCore {
       this.error(`worker: the trace sign must be 1 or -1, got ${JSON.stringify(sign)}`);
       return;
     }
-    const runner = this.runner;
-    if (this.mode !== 'live' || runner === null) {
+    if (this.mode !== 'live' || this.runner === null) {
       this.error('worker: a trace sign needs a live run with a detector');
       return;
     }
@@ -277,17 +349,61 @@ export class WorkerCore {
       this.error('worker: the trace sign must come before reading starts');
       return;
     }
+    this.applySign(sign);
+  }
+
+  /**
+   * step() starts again with `sign` on every input so far (nothing is active before reading, spec 7.4),
+   * so a replay of detector_in.jsonl with this sign gives the same answers; written to events.jsonl,
+   * with the deep breaths' d when they gave it. Only before reading, with a detector. A sign set here
+   * ends the search of the deep breaths.
+   */
+  private applySign(sign: 1 | -1, d?: readonly number[]): void {
+    const runner = this.runner;
+    if (runner === null || this.beforeReading === null) return;
     let next: DetectorRunner;
     try {
       next = new DetectorRunner({ ...runner.choice, sign });
-      for (const d of this.beforeReading) next.feed(d);
+      for (const x of this.beforeReading) next.feed(x);
     } catch (err) {
       this.error(`worker: the trace sign was not applied: ${errText(err)}`);
       return;
     }
     this.runner = next;
     this.signKnown = true;
-    this.writeEvent({ n: this.nKnown, e: 'detector_sign', det: this.variant, sign });
+    this.signFinder = null;
+    const line: DetectorSignEvent = { n: this.nKnown, e: 'detector_sign', det: this.variant, sign };
+    if (d !== undefined) line.d = jsonNumbers(d);
+    this.writeEvent(line);
+  }
+
+  /**
+   * headstart (spec 7.4, 7.11): the sign from the three paced deep breaths, with the agreement and the
+   * margin of spec 7.4. Without one the page shows DEEP_BREATH_SIGN_ERROR and D1 never stops the
+   * narrator in this run (its answers stay dropped); the voice still does (the audio safety). Either
+   * way events.jsonl says so: detector_sign with the sign, or with sign null and why (spec 7.11: the
+   * session folder stays on the computer of the run).
+   */
+  private findSign(): void {
+    const finder = this.signFinder;
+    this.signFinder = null;
+    if (finder === null || this.signKnown || this.runner === null || this.beforeReading === null || this.finished) return;
+    const r = finder.result();
+    if (r.use !== null) {
+      this.applySign(r.use, r.d);
+      return;
+    }
+    this.noSign(r.why ?? 'no clear direction on the deep breaths', r.d);
+    this.error(DEEP_BREATH_SIGN_ERROR);
+  }
+
+  /** headstart without a sign of the run: D1's answers stay dropped; events.jsonl gets detector_sign with sign null. */
+  private noSign(why: string, d?: readonly number[]): void {
+    this.signFailed = true;
+    const line: DetectorSignEvent = { n: this.nKnown, e: 'detector_sign', det: this.variant, sign: null, why };
+    if (d !== undefined) line.d = jsonNumbers(d);
+    // why is a key of the spec 8.1 order and sign is not: write them in the order a reader of the file expects.
+    this.writeEvent(orderKeys(line, 'events.jsonl'));
   }
 
   /**
@@ -339,6 +455,7 @@ export class WorkerCore {
     if (this.finished || this.endReason === null) return;
     this.finished = true;
     this.pending.clear();
+    this.liveTrace.clear();
     this.sendSession(JSON.stringify({ t: 'end', reason: this.endReason }));
     this.env.postToMain({ k: 'closed' });
   }
@@ -384,10 +501,25 @@ export class WorkerCore {
     const pkt: WorkerToDeck = { k: 'pkt', seq: batch.seq, hold };
     this.deck?.postMessage(pkt);
     this.sendDet(batch);
+    if (this.mode === 'live') this.observePacket(batch, line);
     if (!out || !this.keepAnswers) return;
     // Events of a packet wait for its arrival sample nArr, which Deck stamps (spec 6.2, 8.1).
     if (out.fire) this.pend(batch.seq, { e: 'fire', det: this.variant, seq: batch.seq, v: out.fire.v, theta: out.fire.theta });
     if (out.armed !== undefined) this.pend(batch.seq, { e: 'armed', det: this.variant, on: out.armed });
+  }
+
+  /**
+   * Live mode, off the stop path: the packet's trace for the live view (sent at its arr stamp, with
+   * the sign step() runs with) and, in headstart before reading, for the sign of the deep breaths.
+   */
+  private observePacket(batch: DetBatch, line: Record<string, unknown>): void {
+    this.signFinder?.packet(batch.seq, batch.tr, landmarkTs(line));
+    const sign = this.runner?.choice.sign ?? 1;
+    this.liveTrace.set(batch.seq, { sign, count: batch.tr.length, pts: thinTrace(batch.tr, sign, this.liveThinning) });
+    if (this.liveTrace.size > LIVE_TRACE_PENDING_MAX) {
+      const oldest = this.liveTrace.keys().next();
+      if (!oldest.done) this.liveTrace.delete(oldest.value);
+    }
   }
 
   private onValidation(line: Record<string, unknown>): void {
@@ -431,7 +563,13 @@ export class WorkerCore {
     this.clock(line.n);
     switch (line.k) {
       case 'arr':
+        this.signFinder?.arrival(line.seq, line.n);
         this.flushPending(line.seq, line.n);
+        this.flushLiveTrace(line.seq, line.n);
+        break;
+      case 'mark':
+        // headstart: the step after the last exhale has started, so the sign of the breaths is due (spec 7.11).
+        if (line.what === 'step' && this.signFinder?.step(line.name, line.n) === true) this.findSign();
         break;
       case 'voice':
         this.input({ k: 'voice', n: line.n, on: line.on }, line.n);
@@ -466,10 +604,14 @@ export class WorkerCore {
   /** The narrator reads for the first time: no new sign from here on (spec 7.4, 7.11). */
   private readingStarted(): void {
     if (this.beforeReading === null) return;
-    this.beforeReading = null;
-    if (!this.signKnown && this.runner !== null) {
+    // The step after the last exhale never came (a scenario that reads at once): the breaths seen so far decide.
+    if (this.signFinder?.sawBreaths === true) this.findSign();
+    this.signFinder = null;
+    if (!this.signKnown && this.runner !== null && !this.signFailed && !this.finished) {
+      this.noSign('reading started before any deep breath');
       this.error('worker: no trace sign before reading started (headstart takes it from three deep breaths, spec 7.11); D1 does not stop the narrator in this run');
     }
+    this.beforeReading = null;
   }
 
   // ---------------------------------------------------------------- host
@@ -544,6 +686,14 @@ export class WorkerCore {
     for (const d of list) this.writeEvent({ n, ...d });
   }
 
+  /** Live view: the trace of packet seq at its arrival sample n. */
+  private flushLiveTrace(seq: number, n: number): void {
+    const t = this.liveTrace.get(seq);
+    if (!t) return;
+    this.liveTrace.delete(seq);
+    this.env.postToMain({ k: 'trace', n, sign: t.sign, count: t.count, pts: t.pts });
+  }
+
   private clock(n: number): void {
     if (Number.isFinite(n) && (this.nKnown === null || n > this.nKnown)) this.nKnown = n;
   }
@@ -558,6 +708,17 @@ export class WorkerCore {
 
   private writeEvent(line: EventLine): void {
     this.sendSession(JSON.stringify({ t: 'event', line }));
+    if (this.mode === 'live') this.showEvent(line);
+  }
+
+  /** Live view: D1 fires and activity as written to events.jsonl (only live mode keeps them, spec 7.3). */
+  private showEvent(line: EventLine): void {
+    if (line.e === 'fire' && typeof line.n === 'number') {
+      const f = line as { n: number; v: number; theta: number };
+      this.env.postToMain({ k: 'fire', n: f.n, v: f.v, theta: f.theta });
+    } else if (line.e === 'armed' && typeof line.n === 'number') {
+      this.env.postToMain({ k: 'armed', n: line.n, on: (line as { on: boolean }).on });
+    }
   }
 
   private sendDet(line: DetectorLine): void {

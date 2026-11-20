@@ -15,6 +15,13 @@ export interface PageConfig {
   devices: { input?: string; output?: string };
   /** Optional: demo take with the face preview (spec 12.2, 15.5). */
   facePreview: boolean;
+  /** SmartSpectra SDK version host found in live/package.json, for the live view (spec 15.1, 15.2); null when unknown. */
+  sdkVersion: string | null;
+  /**
+   * headstart: the signal check covers the lens (spec 15.2). Only `lensCheck: false` from host turns it
+   * off: smoke saw an SDK error on the covered lens, or settings.env COPYHOLDER_LENS_CHECK=off.
+   */
+  lensCheck: boolean;
   /** The JSON as host served it; the worker gets this, with fields the page does not read. */
   raw: Record<string, unknown>;
 }
@@ -51,6 +58,8 @@ export function parseConfig(raw: unknown): PageConfig {
     consentText,
     devices,
     facePreview: r.facePreview === true,
+    sdkVersion: typeof r.sdkVersion === 'string' && r.sdkVersion.trim() !== '' ? r.sdkVersion.trim() : null,
+    lensCheck: r.lensCheck !== false,
     raw: r,
   };
 }

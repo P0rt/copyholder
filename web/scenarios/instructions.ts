@@ -107,6 +107,23 @@ export const SMOKE_INSTRUCTION: Instruction = {
   button: 'Start',
 };
 
+/** headstart (spec 7.11, PREREG.md §11): the live demo on the sample text. */
+export const HEADSTART_INSTRUCTION: Instruction = {
+  blocks: [
+    { kind: 'p', text: 'Live demo. About five minutes.' },
+    {
+      kind: 'ol',
+      items: [
+        'Follow the prompts.',
+        'Listen to the text. When you hear a mistake, correct it aloud in three to five words.',
+        'The narrator may stop before you speak. If it stops and you heard nothing wrong, stay silent.',
+      ],
+    },
+  ],
+  footer: 'Sit still, eyes on the dot.',
+  button: 'Start',
+};
+
 /** The instruction as plain text, one paragraph per line group, as the spec writes it. */
 export function instructionPlainText(ins: Instruction): string {
   const parts = ins.blocks.map((b) => {

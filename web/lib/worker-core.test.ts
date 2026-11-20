@@ -434,7 +434,10 @@ describe('worker: the trace sign of the run (spec 7.4, 7.11)', () => {
     runSynth(a, { readFromN: READ_FROM });
     expect(pkts(a).length).toBeGreaterThan(2_000);
     expect(pkts(a).every((p) => p.hold === false)).toBe(true);
-    expect(a.session.lines('event')).toEqual([]);
+    // events.jsonl says so: detector_sign with sign null and why (docs/protocol.md), and nothing else.
+    expect(a.session.lines('event')).toEqual([
+      { n: READ_FROM, e: 'detector_sign', det: 'D1', why: 'reading started before any deep breath', sign: null },
+    ]);
     expect(a.toMain.filter((m) => m.k === 'error')).toEqual([{ k: 'error', message: expect.stringMatching(/^worker: no trace sign before reading started/) }]);
     // With the page's sign before reading, the run is a live one.
     const b = wiredWorker({ mode: 'headstart', tapUrl: TAP_URL, detector: D1_SETUP });

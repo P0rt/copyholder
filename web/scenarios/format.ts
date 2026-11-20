@@ -85,8 +85,11 @@ export interface PlayStep extends StepBase {
 
 export interface ClicksStep extends StepBase {
   k: 'clicks';
-  /** Loop-check block (spec 6.3): Deck plays the 10 clicks inside the step. */
-  block: 'A' | 'B';
+  /**
+   * Loop-check block A or B (spec 6.3): Deck plays the 10 clicks inside the step. 'demo': the three
+   * sync clicks before the shown part of a live take (spec 15.1, 15.4; web/lib/clicks.ts).
+   */
+  block: 'A' | 'B' | 'demo';
 }
 
 export interface WaitStep extends StepBase {

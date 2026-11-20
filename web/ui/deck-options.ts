@@ -24,7 +24,15 @@ export interface DeckNodeOptions {
   /** Output gain until the first {k:'gain'} (spec 7.7). */
   gain: number;
   vadParams?: VadParams;
+  /** Samples per level message; absent: Deck's 4800 (10 per second). */
+  levelWindowSamples?: number;
 }
+
+/**
+ * Level messages for the live view (spec 15.2): 2400 samples, 20 per second, so the narrator and
+ * microphone lanes move smoothly. Only a plan with the live view asks for it.
+ */
+export const LIVE_VIEW_LEVEL_WINDOW_SAMPLES = 2_400;
 
 /** calib.json `vad` of doctor (analysis/doctor.ts): the floor and the periodicity threshold (spec 7.12). */
 export interface DoctorVadValues {
@@ -103,10 +111,18 @@ export function chooseDeckVadParams(config: Obj): DeckVadChoice | null {
   return { params: p, source: `${DECK_SOURCES[pick.origin]} (floor ${p.floorDb} dB, periodicity ${p.periodicity})` };
 }
 
-/** processorOptions for `new AudioWorkletNode(ctx, 'deck', ...)` (docs/protocol.md). */
-export function deckNodeOptions(config: { mode: string; raw: Obj }, gain: number): { options: DeckNodeOptions; vadSource: string } {
+/**
+ * processorOptions for `new AudioWorkletNode(ctx, 'deck', ...)` (docs/protocol.md). With liveView
+ * (headstart) Deck sends its level messages 20 times per second; other plans keep Deck's default.
+ */
+export function deckNodeOptions(
+  config: { mode: string; raw: Obj },
+  gain: number,
+  opts: { liveView?: boolean } = {},
+): { options: DeckNodeOptions; vadSource: string } {
   const vad = chooseDeckVadParams(config.raw);
   const options: DeckNodeOptions = { mode: config.mode, gain };
   if (vad) options.vadParams = vad.params;
+  if (opts.liveView === true) options.levelWindowSamples = LIVE_VIEW_LEVEL_WINDOW_SAMPLES;
   return { options, vadSource: vad ? vad.source : 'none in /api/config: Deck runs DEFAULT_VAD_PARAMS' };
 }

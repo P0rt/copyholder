@@ -8,8 +8,9 @@ import { scenarioFor, type ScenarioPlan } from './scenarios/index.ts';
 import type { Step } from './scenarios/format.ts';
 import { apiUrl, parseConfig, type PageConfig } from './ui/config.ts';
 import { liveConsentText, micConsentText } from './ui/consent.ts';
-import { deckNodeOptions } from './ui/deck-options.ts';
+import { deckNodeOptions, LIVE_VIEW_LEVEL_WINDOW_SAMPLES } from './ui/deck-options.ts';
 import { nearestLevelDb, OUTPUT_LEVELS_DB, startLevel } from './ui/levels.ts';
+import { createLiveView, type LiveView } from './ui/live-view.ts';
 import { DECK_NODE_OPTIONS, DECK_PROCESSOR_NAME, type FailReason, type FromDeck, type FromWorker } from './ui/messages.ts';
 import { loadPlanAssets, type PlanAssets } from './ui/narrator.ts';
 import { holdWakeLock, watchPageEvents } from './ui/page-events.ts';
@@ -74,7 +75,8 @@ async function main(): Promise<void> {
   const level = startLevel(config.calib?.output_gain);
   log(`output level ${level.db} dB (${level.source})`);
   // Deck's voice detector runs on the parameters analysis uses after the run (docs/protocol.md).
-  const deck = deckNodeOptions(config, level.gain);
+  // The live view (headstart) asks Deck for 20 level messages per second instead of 10.
+  const deck = deckNodeOptions(config, level.gain, { liveView: plan.liveView === true });
   log(`voice detector parameters: ${deck.vadSource}`);
   // processorerror can fire before the run screen exists; the latch keeps it for the controller (spec 12.2).
   const deckFailure = new FailureLatch();
@@ -100,7 +102,7 @@ async function main(): Promise<void> {
     view.message('Cannot start', `The microphone or the audio did not start: ${errText(err)}`, 'error');
     return;
   }
-  run(view, session, plan, steps, assets, level.gain, deckFailure);
+  run(view, session, plan, steps, assets, level.gain, deckFailure, config.sdkVersion);
 }
 
 /** The message after a failure the page found itself (spec 12.2). */
@@ -112,9 +114,23 @@ function failureText(reason: FailReason, detail: string): string {
   return `${what} The files stay in the session folder. The terminal shows what happened.`;
 }
 
-function run(view: PageView, session: Session, plan: ScenarioPlan, steps: Step[], assets: PlanAssets, gain: number, deckFailure: FailureLatch): void {
+function run(
+  view: PageView,
+  session: Session,
+  plan: ScenarioPlan,
+  steps: Step[],
+  assets: PlanAssets,
+  gain: number,
+  deckFailure: FailureLatch,
+  sdkVersion: string | null,
+): void {
   const screen = view.run({ meters: plan.meters, devicePanel: plan.devicePanel, countdown: plan.countdown, levelsDb: OUTPUT_LEVELS_DB });
   screen.devices(session.settings);
+  // The live view of a take (spec 15.2): only plans that ask for it; the other screens stay as they are.
+  const live: LiveView | null = plan.liveView
+    ? createLiveView(document, { sdkVersion, levelWindowSamples: LIVE_VIEW_LEVEL_WINDOW_SAMPLES, clockS: () => session.ctx.currentTime, log })
+    : null;
+  if (live) screen.mount(live.panel);
   const releaseWakeLock = holdWakeLock(navigator.wakeLock, document, log);
   const unwatch = watchPageEvents({ win: window, doc: document, mediaDevices: navigator.mediaDevices, track: session.track }, (ev) =>
     session.toWorker({ k: 'event', ...ev }),
@@ -136,6 +152,7 @@ function run(view: PageView, session: Session, plan: ScenarioPlan, steps: Step[]
     window.removeEventListener('keydown', onKey);
     session.stopMicrophone();
     controller.microphoneOff();
+    live?.stop();
   };
 
   const controller = new RunController(
@@ -177,8 +194,15 @@ function run(view: PageView, session: Session, plan: ScenarioPlan, steps: Step[]
     () => session.ctx.currentTime,
   );
 
-  session.deck.port.onmessage = (e: MessageEvent<FromDeck>) => controller.handleDeck(e.data);
-  session.worker.onmessage = (e: MessageEvent<FromWorker>) => controller.handleWorker(e.data);
+  session.deck.port.onmessage = (e: MessageEvent<FromDeck>) => {
+    live?.deck(e.data);
+    controller.handleDeck(e.data);
+  };
+  session.worker.onmessage = (e: MessageEvent<FromWorker>) => {
+    // The live view takes its own messages (trace, fires, D1 activity, the sign of the deep breaths).
+    if (live?.worker(e.data) === true) return;
+    controller.handleWorker(e.data);
+  };
   session.worker.onerror = (e) => {
     log('worker failed', e.message);
     screen.note(`The worker failed: ${e.message}`);

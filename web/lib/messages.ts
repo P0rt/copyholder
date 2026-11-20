@@ -96,8 +96,13 @@ export interface ArmedEvent { n: number; e: 'armed'; det: DetectorVariant; on: b
  * parameters recompute the edges after the recording): the whole params/frozen.json `vad` block.
  */
 export interface VadEvent { n: number; e: 'vad'; source: VadSource; note?: string; params: VadFrozenBlock }
-/** The trace sign step() runs with from here on, set before reading starts (spec 7.4, 7.11). */
-export interface DetectorSignEvent { n: number | null; e: 'detector_sign'; det: DetectorVariant; sign: 1 | -1 }
+/**
+ * The trace sign step() runs with from here on, set before reading starts (spec 7.4, 7.11). headstart
+ * writes one for its three deep breaths either way: `d` holds each breath's change of the raw trace
+ * over its inhale (core/detector polaritySign; null where a window held no sample), and when they gave
+ * no sign, `sign` is null, `why` says why, and D1 never stops the narrator in that run.
+ */
+export interface DetectorSignEvent { n: number | null; e: 'detector_sign'; det: DetectorVariant; why?: string; sign: 1 | -1 | null; d?: Array<number | null> }
 /** Page events (window, device, gain, preflight_ok, ...) with the worker's sample number; null before any audio. */
 export interface PageEventLine { n: number | null; e: string; [field: string]: unknown }
 export type EventLine = FireEvent | HoldEvent | ResumeEvent | ArmedEvent | VadEvent | DetectorSignEvent | PageEventLine;
@@ -151,6 +156,12 @@ export interface DeckProcessorOptions {
   vadParams?: Record<string, unknown>;
   /** Where the page took vadParams from, for the `vad` line of events.jsonl. */
   vadSource?: string;
+  /**
+   * Samples per `level` message (default LEVEL_WINDOW_SAMPLES, 10 per second). The live view of a
+   * demo take asks for 2400 (20 per second, spec 15.2). Levels are counted from sample 0, so the k-th
+   * level message covers samples (k - 1) * window to k * window.
+   */
+  levelWindowSamples?: number;
 }
 
 // ---- main thread <-> worker ----
@@ -182,10 +193,26 @@ export type MainToWorker =
   | { k: 'detector'; sign: number }
   | { k: 'end'; reason: EndReason | string };
 export type TapState = 'starting' | 'running' | 'stopped';
+
+/**
+ * Live mode only, for the live view of a take (spec 15.2): the trace of one packet at its arrival
+ * sample n (Deck's arr stamp). pts are [camera ts in us, value times sign], at most one per 1/30 s
+ * step of camera time (worker-core thinTrace); count is the number of trace samples the packet carried
+ * before that thinning.
+ */
+export interface TraceToMain { k: 'trace'; n: number; sign: 1 | -1; count: number; pts: TracePair[] }
+/** Live mode only: a D1 fire as written to events.jsonl (n is its packet's nArr, spec 6.2). */
+export interface FireToMain { k: 'fire'; n: number; v: number; theta: number }
+/** Live mode only: D1 became active or stopped being active at sample n (spec 7.4). */
+export interface ArmedToMain { k: 'armed'; n: number; on: boolean }
+
 export type WorkerToMain =
   | { k: 'sdk'; tap: TapState; ok: boolean; note?: string }
   | { k: 'abort'; reason: string }
   /** host's {t:'quickcheck'} after the recording, passed on (docs/protocol.md). */
   | { k: 'quickcheck'; ok: boolean | null; text: string | null }
   | { k: 'closed' }
-  | { k: 'error'; message: string };
+  | { k: 'error'; message: string }
+  | TraceToMain
+  | FireToMain
+  | ArmedToMain;

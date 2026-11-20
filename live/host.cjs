@@ -5,7 +5,7 @@
 //   node live/host.cjs --mode <gate|doctor|smoke|session|rehearsal|demo|spacebar|headstart|live-from|live-sim>
 //     [--pack A] [--id <id>] [--plan <id>] [--from <id>] [--tap real|mock] [--no-open] [--level]
 // Settings (settings.env or the environment, live/lib/settings.cjs): COPYHOLDER_PORT, COPYHOLDER_MIC_NAME,
-// COPYHOLDER_OUTPUT_NAME. Test hooks: COPYHOLDER_TAP_STOP_BUDGET_MS shortens the wait for tap's stop
+// COPYHOLDER_OUTPUT_NAME, COPYHOLDER_LENS_CHECK (headstart, live/lib/lens-check.cjs). Test hooks: COPYHOLDER_TAP_STOP_BUDGET_MS shortens the wait for tap's stop
 // (live/lib/tap-timing.cjs), COPYHOLDER_QUICKCHECK_TIMEOUT_MS the wait for quickcheck.
 const fs = require('node:fs');
 const http = require('node:http');
@@ -31,6 +31,7 @@ const {
   gitInfo, machineModel, sdkVersionFrom, hostSetting, metricsSetting, requestedMetrics,
 } = require('./lib/repo-info.cjs');
 const { pageCalib, usableGain, detectorSetup } = require('./lib/calib.cjs');
+const { SETTING: LENS_SETTING, headstartLensCheck } = require('./lib/lens-check.cjs');
 const { openPage } = require('./lib/chrome.cjs');
 const { sdkErrorText, isRunningStatus, isCameraFailure, ELECTRON_HINT } = require('./lib/sdk-codes.cjs');
 const { baseIdFor, reserveSessionDir } = require('./lib/session-ids.cjs');
@@ -225,6 +226,7 @@ class Host {
     this.sourceDir = null;
     this.calib = null;
     this.calibFrom = { doctor: [], gate: null };
+    this.lensCheck = null; // headstart: {lens, why}, whether the signal check covers the lens (spec 15.2)
     this.doctorGain = null;
     this.savedHashes = null; // {name: hex} of the files manifest.json lists, once saved
     this.tap = null;
@@ -291,6 +293,10 @@ class Host {
     this.machine = machineModel();
     this.sdkVersion = sdkVersionFrom(p.livePackageJson);
     this.launcher = this.env.COPYHOLDER_LAUNCHER === 'electron' || process.versions.electron ? 'electron' : 'node';
+    if (o.mode === 'headstart') {
+      this.lensCheck = headstartLensCheck(p.sessionsDir, hostSetting(this.env, p.repoRoot, LENS_SETTING));
+      if (!this.lensCheck.lens) say(`The signal check keeps only the deep breath, without the covered lens (spec 15.2): ${this.lensCheck.why}.`);
+    }
 
     const { id, dir } = reserveSessionDir(p.sessionsDir, baseIdFor(o, p.sessionsDir));
     this.id = id;
@@ -830,6 +836,8 @@ class Host {
       planCommitment: this.planCommitment,
       // COPYHOLDER_MIC_NAME and COPYHOLDER_OUTPUT_NAME: part of a device's name; a key is left out when not set
       devices: { ...this.devices },
+      // The SDK version of live/package.json, for the live view of a take (spec 15.1, 15.2); null when unknown
+      sdkVersion: this.sdkVersion,
     };
     // Demo take: the face preview of spec 15.5, unless it was taken out (spec 14.4, assumption: a setting).
     if (o.mode === 'demo' && hostSetting(this.env, this.paths.repoRoot, 'COPYHOLDER_FACE_PREVIEW') !== 'off') {
@@ -837,6 +845,8 @@ class Host {
     }
     // live-from (spec 6.5): channel 0 of the recording goes into Deck in place of the microphone.
     if (o.mode === 'live-from') cfg.replayAudio = 'mic.wav';
+    // headstart: whether the signal check covers the lens (spec 15.2, live/lib/lens-check.cjs).
+    if (o.mode === 'headstart') cfg.lensCheck = this.lensCheck ? this.lensCheck.lens : true;
     return cfg;
   }
 
