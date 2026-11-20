@@ -1,12 +1,12 @@
 # Copyholder pre-registration
 
-The tag `gate-prereg` freezes this file before the day-1 gate recording; `PREREG.md.ots` dates it, and the file never changes after the tag [8.4]. The tagged commit differs from `{{APP_COMMIT}}` only in `PREREG.md` and `PREREG.md.ots`. At `{{APP_COMMIT}}` the gate analysis code and `params/frozen.json` (without `k` and `theta_G`) hold the same rules as code and numbers, and they settle any gate detail this file summarises or leaves open. A session detail left open here and settled by the code at `freeze-1` is listed in the `notes` field of `scoring_rules.json` and named in the article [8.4].
+The tag `gate-prereg` freezes this file before the day-1 gate recording; `PREREG.md.ots` dates it, and the file never changes after the tag [8.4]. The tagged commit differs from `{{APP_COMMIT}}` only in `PREREG.md` and `PREREG.md.ots`. At `{{APP_COMMIT}}` the gate analysis code and `params/frozen.json` (without `k` and `theta_G`) hold the same rules as code and numbers, and they settle any gate detail this file summarises or leaves open. A session detail left open here and settled by the code at `freeze-1` is listed in the `notes` field of `scoring_rules.json` and named in the article [8.4]. Section 11, added before any gate recording, amends §7 to §10: pack A tunes, packs B and C confirm.
 
 [9.6] is a section of the project's design specification and § a section of this file; *(assumption)* marks a value or rule with no measurement behind it, frozen like the rest. "The participant" is the one person recorded. Times are audio samples at 48 000 per second unless a unit is given.
 
 ## 1. Fixed before the data [7.4, 8.4, 14.4]
 
-Fixed now: every definition, threshold, grid, check, rule and branch below, and all of `params/frozen.json` except `k` and `theta_G`. Computed per recording by fixed rules, not tuned: the trace sign `s`; D1's A, `med_q`, `s_q` and `theta`; `L_rt`; the onset floor `N`; `A_ref`. Detector parameters change only by three rules written here: stage A (§6.2), the bounded re-tune after `BETWEEN` (§7.7) and the `k` step after the rehearsal (§8). The sessions' catch-window bound follows the data by the rule of §3.3. No other detector parameter, threshold or scoring rule changes with the data. Also fixed in advance: after two failed planting dry runs only the classes `negation` and `number` remain, and the dry run picks the planting model and confirms its temperatures [7.8, 10.2]; warning thresholds, which decide nothing, come from the first runs [6.3].
+Fixed now: every definition, threshold, grid, check, rule and branch below, and all of `params/frozen.json` except `k` and `theta_G`. Computed per recording by fixed rules, not tuned: the trace sign `s`; D1's A, `med_q`, `s_q` and `theta`; `L_rt`; the onset floor `N`; `A_ref`. Detector parameters change only by the rules written here: stage A (§6.2), the bounded re-tune after `BETWEEN` (§7.7), the `k` step after the rehearsal (§8) and the tuning on pack A (§11), which replaces the last two. The sessions' catch-window bound follows the data by the rule of §3.3. No other detector parameter, threshold or scoring rule changes with the data. Also fixed in advance: after two failed planting dry runs only the classes `negation` and `number` remain, and the dry run picks the planting model and confirms its temperatures [7.8, 10.2]; warning thresholds, which decide nothing, come from the first runs [6.3].
 
 Cuts allowed in advance narrow the scope and change no rule [14.4, 16]: D3, on the verdict day (the ladder of §7.7 then ends at rung 2); rival M, by 18 November; rivals T and M in the first gate verdict, which then follow with `--exploratory`; the third numbers session, by noon on 18 November; the spacebar block, by that evening. Fewer than three texts give two sessions *(assumption)*. No branch is written for a gate without a verdict (a `NOT EVALUABLE` content re-record, no pack left, or no camera by noon on Saturday); a pack made then has its cue-list hash fixed before its recording, not here [14.3, 18.3].
 
@@ -363,6 +363,36 @@ Written before the first take:
 6. A take counts as recorded once its sealed audio has started playing. A preflight failure is not a take.
 
 Point 2 is read from each take's clock report and receipt; the plan of a take never recorded is marked `unused` in `results.json`.
+
+## 11. Amendment of 20 November 2026: tuning on pack A, confirmation on packs B and C
+
+Written before any gate recording and frozen with the rest of this file by `gate-prereg`. Where it differs from §7 to §10, this section wins.
+
+**Why.** The challenge deadline, 22 November, leaves no time for the numbers sessions, the rehearsal and the spacebar block. The confirmatory data therefore come from two more gate packs, B and C, recorded with detector parameters tuned on pack A and frozen before pack B. Sections 3.3, 8, 9 and 10 govern nothing, except the statistics this section takes from §9.1 and §9.2.
+
+**Pack A: the gate, then development data.** Pack 0 and pack A are recorded and analysed exactly as §7 says: quickcheck, clocks, labels, stage A, stage B and the verdict, which is reported as written. Whatever the verdict, pack A then becomes development data. Of §7.7 only the tuning below applies, and `KILL` does not end the work.
+
+**Tuning on pack A**, at most 4 hours of work, on pack A only:
+
+1. With `PASS`, the stage A parameters stay.
+2. Otherwise the ladder of §7.7 runs, rungs 1 to 3 with D3, whichever rows are `BETWEEN` or `KILL`; the first rung that gives `PASS` on all five rows of pack A sets the parameters.
+3. If no rung does, among all parameter sets the ladder tried, those with at most 2 false holds per active minute (row 3) remain, and the one with the highest row 1 count wins; ties go to the lower row 3 rate, then `L` nearer 5, then `M` nearer 2, then D1 before D3. If none has row 3 at most 2, the set with the lowest row 3 rate wins.
+
+Each candidate gets its own `theta_G` by §6.4. The chosen parameters go into `params/frozen.json` and its copy `params/retune.json`; `npm run freeze -- gate-retune` freezes them together with the pooled analysis code below, and the tag is pushed before pack B is recorded.
+
+**Packs B and C: confirmation.** Both are recorded with the frozen parameters by the scenario of §7.3. On each, stage A only checks `params/frozen.json` against the tagged copy and tunes nothing; each gets quickcheck, clocks, labels, stage B and its own five rows, printed as in §7.6. A recording that fails quickcheck for a technical reason before 4:15 is recorded again on the same pack; one that fails after 4:15 is lost, reported with its reason and not replaced *(assumption: no third pack is made)*. A pack with fewer than 12 valid objections stays in the pooled numbers, flagged.
+
+**Confirmatory numbers**, pooled over the valid objections of packs B and C (at most 28), with the frozen trace detector, automatic onsets and virtual stops (§3.1):
+
+- **H1, main:** the share of valid objections with a trace-detector stop before the voice is above chance. Exact binomial test, one-sided, α = 0.05, against the larger of two chance estimates of §9.2: (1) Poisson, from the false holds and active minutes of the two objection blocks, with the rate's one-sided 95% upper bound; (2) circular shifts within the two objection blocks. Estimate 3 needs sentence ends from a sealed plan and is not computed. The share carries its 95% Wilson interval.
+- **Lead:** the median lead over the stops before the voice, with the 95% interval of §9.1.
+- **H3**, the chest stops the narrator earlier than the lips (G with each pack's stage A `theta_G`), and **H4**, earlier than the 250 ms rule: one-sided sign tests on the paired objections of §6.5, with Holm's correction for the two.
+- **False holds** per active minute of the two objection blocks, with a 95% Poisson interval.
+- The sensitivity lines of §5, with the participant's blind labels.
+
+Every number carries its n and the setup line: one person, one setup, the SDK version, the number of events. Pack A's numbers are printed apart as development data and never pooled with B and C.
+
+**Demo takes.** At most three live takes of `npm run headstart` on the public sample text in `sample/`, with the frozen parameters, the trace sign from three paced deep breaths at the start and the audio safety stop on. They are not confirmatory and have no sealed plan. The first take with at least one `CHEST` stop made while no voice was on and followed by the participant's voice within 1.5 s, by Deck's voice edges, is published; if no take qualifies, the last one is.
 
 ## Placeholders
 
