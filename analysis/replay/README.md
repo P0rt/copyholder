@@ -19,15 +19,17 @@ Exit codes:
 | Code | When |
 |---|---|
 | 0 | verified: the verdict and the five row outcomes of every set are recomputed and match without a condition, and no recomputed value differs; the last line names any other value a set leaves not recomputable, which stays unchecked |
-| 1 | a recomputed value differs from the set, or a set or an output is refused |
-| 2 | usage: an unknown option, an option without its value, the same set named twice, or a path inside `gate/` or `sample/` |
-| 3 | no recomputed value differs, but the verdict or a row outcome of a set is not recomputable from it (a set without `verdict.json` has none), or matches only under a condition the set does not show |
+| 1 | a recomputed value differs from the set, a set is refused, or an output asked for is not written (see "Table and figure") |
+| 2 | usage: an unknown option, an option without its value or given twice, no set named, the same set named twice, or a path inside `gate/` or `sample/` |
+| 3 | no recomputed value differs, but the verdict or a row outcome of a set is not recomputable from it (a set without `verdict.json` has none), or matches only under a condition the set does not show. With `--json`, `--svg` or `--png`, which need the verdict and the cues of every set, a set without `verdict.json` or `marks.jsonl` ends the run with 1 instead |
 
 Pack writes `marks.jsonl` and `g_resets.json` into every gate set, and `sniff_onsets.json` into
 one with its verdict (see below), so a set as pack writes it is verified (exit 0) when stage B's
-verdict follows from it, with every value of `verdict.json` checked. A set without
-`sniff_onsets.json` is verified as well, but `best_case_ms` and `d1_on_sniffs_ms` of row 4 stay
-unchecked, and the last line names them. A set without `marks.jsonl`, as an earlier pack wrote it,
+verdict follows from it, with every value of `verdict.json` checked, and the sniff block of
+`calib.json` checked against the recount. A set without `sniff_onsets.json` is verified as well,
+but `best_case_ms` and `d1_on_sniffs_ms` of row 4 stay unchecked, and the last line names them;
+the other numbers of row 4 then come from the sniff block of `calib.json`, as stage B copies
+them, and nothing checks that block. A set without `marks.jsonl`, as an earlier pack wrote it,
 ends with exit 3: its verdict needs the cue and step marks. So does the set of a recording that
 never reached its verdict: it has no `verdict.json` to recompute.
 
@@ -43,7 +45,7 @@ reads or writes inside `gate/` or `sample/`: a set folder, `--params`, `--json`,
 | `manifest.json` | id and pack; it must be a gate record of pack A, B or C, with the id and pack of `verdict.json` |
 | `stream.jsonl` | the detector inputs and the arrival `nArr` of each packet (`core/detector` `parseStream`): what stage B reads from `detector_in.jsonl` and the `arr` lines of `stamps.jsonl`; a file without a packet is refused |
 | `onsets.json` | the replies, their automatic onsets and the blind hand marks |
-| `calib.json` | L_rt and its rule, the trace sign, the sniff lag block of row 4 |
+| `calib.json` | L_rt and its rule, the trace sign, the sniff lag block of row 4, checked against the recount from `sniff_onsets.json` |
 | `clock_report.json` | the onset P90 the label step wrote, checked against the hand marks |
 | `verdict.json` | the values to compare, and `params_sha256` and `tuning` to find the params |
 | `verdict.md` | checked against the text stage B writes from `verdict.json` (`analysis/gate/verdict-text.ts`) |
@@ -51,8 +53,9 @@ reads or writes inside `gate/` or `sample/`: a set folder, `--params`, `--json`,
 | `g_resets.json` | the packets stage B read as reset frames of G; a set without it still replays (see "Readings") |
 | `sniff_onsets.json` | the sample numbers of the sniffs stage B heard in `audio.wav` channel 0, from which replay recounts row 4; a set without it still replays (see below) |
 
-A set with `verdict.json` but without `verdict.md`, `stream.jsonl` or `onsets.json` is refused as
-not whole, and so is a set with `verdict.md` but without `verdict.json`.
+A set with `verdict.json` but without `verdict.md`, `stream.jsonl`, `onsets.json`, `calib.json` or
+`clock_report.json` is refused as not whole, and so is a set with `verdict.md` but without
+`verdict.json`.
 
 A set without `verdict.json` is the set of a recording that never reached its verdict: pack writes
 it without the verdict files when the recording does not count or its stage B has not run (PREREG
@@ -114,16 +117,33 @@ it names every value a set leaves not recomputable.
 - `rows.hits`, `rows.lead`, `rows.false_holds` (with the in-sample rates of the listening
   block), `rows.chest_vs_lips` and their outcomes;
 - `rows.sniff_lag`: `n`, `no_arrival`, the medians and their bound as `calib.json` holds them,
-  and the outcome; with `sniff_onsets.json` replay recounts the sniff lag as stage B does
-  (`analysis/replay/sniffs.ts` `sniffRecountFrom`), which gives `best_case_ms`,
-  `d1_on_sniffs_ms`, the grade on the unrounded medians, and every number of the row when
-  `calib.json` has no sniff block;
+  and the outcome, as stage B copies and grades them; with `sniff_onsets.json` replay recounts
+  the sniff lag as stage B does (`analysis/replay/sniffs.ts` `sniffRecountFrom`), which gives
+  `best_case_ms`, `d1_on_sniffs_ms`, the grade on the unrounded medians, every number of the row
+  when `calib.json` has no sniff block, and the block a line below checks `calib.json` against;
 - `misses`, `other`, `manual_changes` and `verdict`.
 
-Three more lines check other files of the set: `labels_sha256` of `onsets.json` against its
-labels and hand marks (stage B refuses labels that do not give it), the onset P90 of
-`clock_report.json` (stage B reads it there) against the hand marks, and `verdict.md` against the
-text stage B writes from `verdict.json`; a note quotes the first line that differs.
+More lines check other files of the set:
+
+- `labels_sha256` of `onsets.json` against the hash of its labels and hand marks, as stage B
+  checks it. Stage B refuses an `onsets.json` without the hash (`analysis/gate/inputs.ts`
+  `requireLabelsHash`), so in a set with `verdict.json` a null hash reads DIFFERS, with a note.
+  In a set without `verdict.json` null is what the onsets step writes before the label step, and
+  it stands while no event holds a label or a hand mark;
+- the onset P90 of `clock_report.json` (stage B reads it there) against the hand marks;
+- with `sniff_onsets.json`, the sniff block of `calib.json` (`calib.json sniff_lag_ms`) against
+  the block the clocks step writes for the recounted lag (`analysis/clocks/compute.ts`
+  `calibSniffLagBlock`), null where the recount measures no lag (no A_ref). Stage B copies the
+  numbers of the block into row 4 and grades the row on them, and when its own recount differs it
+  only says so in a note; this line ties those numbers to the recording. A `calib.json` without a
+  sniff block reads as null, so it differs beside a recount that measures a lag: the clocks step
+  writes the block whenever it measures one. Each block prints as the first 8 hex digits of the
+  SHA-256 of its JSON; when `calib.json` holds a block the recount does not give, a note gives
+  both;
+- `verdict.md` against the text stage B writes from `verdict.json`; a note quotes the first line
+  that differs. Where a median of row 4 sits on a threshold, stage B may add that it graded the
+  medians before rounding: with `sniff_onsets.json` replay knows whether it did and takes only
+  that text, and without the file it takes either.
 
 ## What it cannot recompute, and why
 
@@ -224,7 +244,9 @@ sign turned), objections without a stop in that window in the "no stop" column, 
 row's label. The lips row leaves out the cues whose lips stop the readings of G place
 differently, and the footnote names them. The SVG is plain, on a white box, without fonts or
 scripts; the PNG is that SVG drawn by headless Chrome at twice its size, 1200 px wide, with the
-Chrome of `--chrome <path>` or `PW_CHROMIUM_PATH`, else Playwright's own Chromium.
+Chrome of `--chrome <path>` or `PW_CHROMIUM_PATH`, else Playwright's own Chromium, which
+`npx playwright install chromium` installs. Without a Chrome that starts, replay writes no PNG
+and exits 1.
 
 All three need the verdict and the cues of every set: when a set has no `verdict.json` or no
 `marks.jsonl`, replay writes none of them and exits 1.
@@ -236,15 +258,21 @@ to look as host leaves a real one (the real tap and its SDK in `manifest.json`, 
 file hashed by the record step of `ledger.jsonl`), scored by stages A and B, packed by `npm run
 pack`, and replayed from `data/<id>/` alone. It shows that pack A, whose row 5 turns on which
 packets with `g` null were reset frames, and pack B, scored with the params the retune froze under
-`gate-retune`, with five sniffs whose best case and D1 on sniffs replay recounts from
-`sniff_onsets.json`, are verified (exit 0), and pack A is not without its `g_resets.json` (exit 3);
-that one changed number of `verdict.json` exits 1, `best_case_ms` and `d1_on_sniffs_ms` among
-them; that without `sniff_onsets.json` those two stay unchecked and the last line names them
-(exit 0), and that a `sniff_onsets.json` whose onsets do not fit the sniff step marks, or that is
-not valid, is refused; that the set of a pack A held back at the objection block exits 3 with no
-value differing, and so does the set of a pack B without a verdict whose `onsets.json` holds no
-event and no labels hash; and that `--json`, `--svg` and `--png` write the table and the figure of
-two packed sets.
+`gate-retune`, each with five sniffs whose best case and D1 on sniffs replay recounts from
+`sniff_onsets.json` and whose sniff block in `calib.json` the recount gives, are verified (exit
+0), and pack A is not without its `g_resets.json` (exit 3); that one changed number of
+`verdict.json` exits 1, `best_case_ms` and `d1_on_sniffs_ms` among them; that without
+`sniff_onsets.json` those two stay unchecked and the last line names them (exit 0), and that a
+`sniff_onsets.json` whose onsets do not fit the sniff step marks, or that is not valid, is
+refused; that the sniff block of `calib.json` changed together with row 4 of `verdict.json`,
+both medians 0.1 ms later or past the KILL threshold with the verdict KILL, and `verdict.md`
+written anew, exits 1 on the `calib.json` line while row 4 and the verdict match; that a set
+whose blind labels were taken out of `onsets.json`, and the onset P90 out of `clock_report.json`,
+`verdict.json` and `verdict.md`, exits 1 on the labels hash, and so does one whose `onsets.json`
+holds no event and no hash; that the set of a pack A held back at the objection block exits 3
+with no value differing, and so does the set of a pack B without a verdict whose `onsets.json`
+holds no event and no labels hash; and that `--json`, `--svg` and `--png` write the table and the
+figure of two packed sets.
 
 `analysis/replay/replay.test.ts` scores synthetic recordings (`analysis/gate/synth.ts`) with
 stages A and B as `analysis/gate.test.ts` does and publishes them as pack does: `stream.jsonl`
@@ -257,8 +285,10 @@ shows that:
   last line that names the two, also for a recording whose params stage A of the next recording
   overwrote;
 - with `sniff_onsets.json`, on a recording with five sniffs and no sniff block in `calib.json`,
-  every number of row 4 is recounted and the verdict is verified (exit 0); without the file row 4
-  is not recomputable (exit 3), and a `sniff_onsets.json` without one of its onsets recounts
+  every number of row 4 is recounted and every value of `verdict.json` matches, but the
+  `calib.json` line differs, as the clocks step writes the block of a lag it measures (exit 1);
+  with that block the set is verified (exit 0); without the file row 4 is not recomputable and no
+  line checks the block (exit 3), and a `sniff_onsets.json` without one of its onsets recounts
   values that differ (exit 1);
 - without `marks.jsonl` replay exits 3, also when `verdict.json` was changed, `tuning` is an
   input when replay rebuilt the params with it, and `--json` and `--svg` are refused;
@@ -290,6 +320,9 @@ shows that:
   condition; at a threshold of row 4 the grade matches only under a condition, and a grade no side
   gives differs; without the step marks after the cues, the values that need the cues are not
   recomputable while stage A and the in-sample rates are;
+- the `calib.json` line takes the block the clocks step writes for the recounted lag, and null
+  for a missing block or a lag without A_ref; at a threshold of row 4, `verdict.md` is taken only
+  in the wording the recount gives, and in either wording without the recount;
 - the table has one row per cue with the counts of the recomputed verdict, the check before
   writing names rows that do not add up, and the SVG has one circle per valid objection in each
   row; options, the data folder, a set named twice and paths inside `gate/` or `sample/` are
