@@ -1,4 +1,4 @@
-// npm run confirm -- <idB> <idC> [--dev <idA>]   the pooled confirmation of PREREG.md section 11
+// npm run confirm -- <idB> [<idC>] [--dev <idA>]   the pooled confirmation of PREREG.md section 11
 //
 // Checks first, before anything is computed: one gate recording of pack B and one of pack C, all
 // their files as their steps wrote them, and params/frozen.json as the retune froze it (equal to
@@ -6,7 +6,11 @@
 // needs its finished confirmatory stage B, run on that file; stage B's computation runs again on
 // it and must give the verdict.json stage B wrote. One that failed quickcheck on condition 6 alone
 // (too few replies) is scored here with stage B's function and stays in the numbers, flagged; one
-// that failed for a technical reason after 4:15 is lost and reported with its reason (section 11).
+// that failed for a technical reason after 4:15, or that the SDK ended with kCreditExhausted at any
+// time, is lost and reported with its reason (section 11).
+// Pack B alone, without <idC>: the numbers of pack B alone, flagged, which section 11 gives when
+// pack C cannot be started for lack of SDK credits. It is refused while the sessions folder holds a
+// pack C recording other than one that failed for a technical reason before 4:15.
 // The numbers of section 11 are pooled over the valid objections of the packs in the numbers.
 // The output is marked not confirmatory when the pooled analysis code differs from its copy under
 // gate-retune, or the tag is not earlier than the recordings.
@@ -20,10 +24,11 @@ import { defaultConfirmDeps, type ConfirmDeps } from './confirm/deps.ts';
 import { runConfirm } from './confirm/run.ts';
 import { GateRefusal } from './gate/common.ts';
 
-export const USAGE = 'usage: npm run confirm -- <idB> <idC> [--dev <idA>]';
+export const USAGE = 'usage: npm run confirm -- <idB> [<idC>] [--dev <idA>]';
 
 export interface ConfirmArgs {
-  ids: [string, string];
+  /** The recordings of packs B and C, or pack B alone. */
+  ids: string[];
   dev: string | null;
 }
 
@@ -48,8 +53,10 @@ export function parseConfirmArgs(argv: readonly string[]): ConfirmArgs | string 
       ids.push(a);
     }
   }
-  if (ids.length !== 2) return `two recording ids are required, one of pack B and one of pack C (got ${ids.length})`;
-  return { ids: [ids[0]!, ids[1]!], dev };
+  if (ids.length < 1 || ids.length > 2) {
+    return `one or two recording ids are required: those of packs B and C, or pack B alone when pack C has no recording (got ${ids.length})`;
+  }
+  return { ids, dev };
 }
 
 export function main(argv: readonly string[], deps: ConfirmDeps = defaultConfirmDeps()): number {

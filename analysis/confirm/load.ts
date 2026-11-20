@@ -7,9 +7,11 @@
 //            technical, PREREG section 7.4): stage A and stage B do not score such a recording,
 //            but section 11 keeps it in the pooled numbers, flagged, so confirm scores it with
 //            stage B's function (analysis/gate/score.ts scoreGate) and the frozen parameters;
-//   lost     a technical failure after the objection block began (4:15): not in the numbers, not
-//            replaced, reported with its reason (section 11).
-// A technical failure before 4:15 is not a recording of the pack: section 11 records the pack again.
+//   lost     a technical failure after the objection block began (4:15), or a recording the SDK
+//            ended with kCreditExhausted at any time: not in the numbers, not replaced, reported
+//            with its reason (section 11).
+// Any other technical failure before 4:15 is not a recording of the pack: section 11 records the
+// pack again (RecordAgainRefusal).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,6 +29,7 @@ import {
   validateCalib,
   validateClockReport,
   validateDetectorInLine,
+  validateEventLine,
   validateManifest,
   validateOnsets,
   validateQuickcheck,
@@ -35,7 +38,9 @@ import {
   validateVerdict,
   type Calib,
   type ClockReport,
+  type EventOther,
   type FrozenParams,
+  type LedgerLine,
   type Manifest,
   type Quickcheck,
   type Validator,
@@ -44,7 +49,7 @@ import {
 import { recountSniffLag } from '../clocks/compute.ts';
 import { frozenParamsFile } from '../lib/calib-io.ts';
 import { sha256Hex } from '../lib/ledger.ts';
-import { sessionDirOf, shownPath } from '../lib/paths.ts';
+import { sessionDirOf, sessionsDir, shownPath } from '../lib/paths.ts';
 import { SESSION_FILES, stepStart } from '../lib/session.ts';
 import { gateSteps } from '../lib/steps.ts';
 import { gResetSeqs, lipBaselines } from '../rivals/index.ts';
@@ -69,7 +74,7 @@ import { scoreGate } from '../gate/score.ts';
 import { loadGateSession, signOf } from '../gate/stage-a.ts';
 import { verdictMarkdown } from '../gate/verdict-text.ts';
 import { gateLayout, scoredCues } from '../gate/view.ts';
-import { ConfirmRefusal } from './common.ts';
+import { ConfirmRefusal, RecordAgainRefusal } from './common.ts';
 import type { PackRuns } from './facts.ts';
 
 /** Runs `f`; a refusal of the gate helpers becomes a refusal of confirm that names the recording. */
@@ -142,6 +147,15 @@ export type PackRole = 'confirm' | 'dev';
 /** How a recording of pack B or C enters the confirmation (section 11; see the head of this file). */
 export type PackStanding = 'counts' | 'content' | 'lost';
 
+/** Why a recording is lost (section 11): the SDK credits ran out, or another technical failure after 4:15. */
+export type LostCause = 'credits' | 'technical';
+
+export interface LostFacts {
+  cause: LostCause;
+  /** Whether Deck had entered the objection block (4:15) when the recording failed. */
+  objectionsBegun: boolean;
+}
+
 /** The confirmatory stage B's outputs, as it wrote them and the ledger holds their hashes. */
 export interface StageBOutputs {
   verdict: Verdict;
@@ -165,6 +179,8 @@ export interface PackRecord {
   quickcheck: Quickcheck;
   /** Why the recording does not count (quickcheck and the clock check); empty when it counts. */
   voidReasons: string[];
+  /** Why a lost recording is lost; null unless the standing is lost. */
+  lost: LostFacts | null;
   /** Hash of params/frozen.json in the confirmatory stage_a line; null when stage A has not run. */
   stageASha256: string | null;
   /** verdict.json and verdict.md of the confirmatory stage B; null when it has not run (content, lost). */
@@ -198,6 +214,27 @@ export function standingOf(q: Pick<Quickcheck, 'result' | 'technical'>, report: 
   if (!clockValid) return 'technical';
   if (q.result === 'GOOD RECORDING') return 'counts';
   return q.technical === false ? 'content' : 'technical';
+}
+
+/** kCreditExhausted, the SDK error for used-up credits (live/lib/sdk-codes.cjs). */
+export const CREDIT_EXHAUSTED_CODE = 4;
+export const CREDIT_EXHAUSTED_NAME = 'kCreditExhausted';
+
+/**
+ * The events.jsonl line that says the SDK ended the recording because its credits ran out: an
+ * `sdk_error` with code 4 or the name kCreditExhausted. Host writes such a line only while it
+ * records, and then stops the recording (live/host.cjs onSdkError); the one restart of code 8 is
+ * not an end. events.jsonl must be the file the record step wrote, when the ledger holds its hash.
+ * Null when there is no such line.
+ */
+export function creditExhaustedEvent(dir: string, records: readonly LedgerLine[]): EventOther | null {
+  if (recordedHash(records, SESSION_FILES.events) !== null) requireRecordedHashes(records, dir, [SESSION_FILES.events]);
+  const text = readText(path.join(dir, SESSION_FILES.events));
+  if (text === null) return null;
+  const rows = parseJsonl(text, validateEventLine).rows as unknown as EventOther[];
+  const ends = (ev: EventOther): boolean =>
+    ev.e === 'sdk_error' && ev['action'] !== 'reset_restart' && (ev['code'] === CREDIT_EXHAUSTED_CODE || ev['name'] === CREDIT_EXHAUSTED_NAME);
+  return rows.find(ends) ?? null;
 }
 
 /** Stamps of the recording as the session loader reads them (valid lines only), without audio.wav. */
@@ -296,7 +333,7 @@ export function inspectPack(arg: string, role: PackRole, env: NodeJS.ProcessEnv)
   }
   const voidReasons = report === null ? [`${QUICKCHECK_FILE} says ${quickcheckLine(q)}`] : recordingVoidReasons(q, report);
   const status = standingOf(q, report);
-  const base = { arg, id, dir, pack, manifest, sdkVersion: manifest.sdk?.version ?? null, startedUtc: manifest.started_utc, ledger, quickcheck: q, voidReasons };
+  const base = { arg, id, dir, pack, manifest, sdkVersion: manifest.sdk?.version ?? null, startedUtc: manifest.started_utc, ledger, quickcheck: q, voidReasons, lost: null };
 
   if (role === 'dev' && status !== 'counts') {
     throw new ConfirmRefusal(
@@ -304,15 +341,20 @@ export function inspectPack(arg: string, role: PackRole, env: NodeJS.ProcessEnv)
     );
   }
   if (status === 'technical') {
-    if (stepStart({ stamps: readStamps(dir) }, gateSteps(pack).objections) === null) {
-      throw new ConfirmRefusal(
+    const objectionsBegun = stepStart({ stamps: readStamps(dir) }, gateSteps(pack).objections) !== null;
+    // Section 11: a recording the SDK ends with kCreditExhausted is lost, before 4:15 too, and not replaced.
+    if (forRecording(what, () => creditExhaustedEvent(dir, records)) !== null) {
+      return { ...base, standing: 'lost', lost: { cause: 'credits', objectionsBegun }, stageASha256: null, stageB: null };
+    }
+    if (!objectionsBegun) {
+      throw new RecordAgainRefusal(
         [
           `${what} failed for a technical reason before its objection block began (4:15), so it is not the recording of pack ${pack}: by PREREG.md section 11 pack ${pack} is recorded again, and that recording is the one to give:`,
           ...voidReasons.map((r) => `  ${r}`),
         ].join('\n'),
       );
     }
-    return { ...base, standing: 'lost', stageASha256: null, stageB: null };
+    return { ...base, standing: 'lost', lost: { cause: 'technical', objectionsBegun }, stageASha256: null, stageB: null };
   }
 
   // Stage A, then the confirmatory stage B with its verdict (sections 7.5, 11). Neither runs on a
@@ -329,6 +371,35 @@ export function inspectPack(arg: string, role: PackRole, env: NodeJS.ProcessEnv)
   }
   forRecording(what, () => requireScorableFiles(dir, ledger));
   return { ...base, standing: status, stageASha256, stageB };
+}
+
+/**
+ * The day-one gate recordings of `pack` in the sessions folder, by their manifest.json alone (kind
+ * gate, that pack), in folder name order: each folder and the id its manifest gives. A folder
+ * without a readable manifest.json holds no recording host started, and is left out.
+ */
+export function gateRecordingsOf(pack: 'B' | 'C', env: NodeJS.ProcessEnv): { dir: string; id: string }[] {
+  const root = sessionsDir(env);
+  let names: string[];
+  try {
+    names = fs.readdirSync(root).sort();
+  } catch {
+    return [];
+  }
+  const out: { dir: string; id: string }[] = [];
+  for (const name of names) {
+    const dir = path.join(root, name);
+    let m: unknown;
+    try {
+      m = JSON.parse(fs.readFileSync(path.join(dir, SESSION_FILES.manifest), 'utf8'));
+    } catch {
+      continue;
+    }
+    if (m === null || typeof m !== 'object') continue;
+    const v = m as Record<string, unknown>;
+    if (v['kind'] === 'gate' && v['pack'] === pack) out.push({ dir, id: typeof v['id'] === 'string' ? v['id'] : name });
+  }
+  return out;
 }
 
 // ---- one recording: stage B's computation again ---------------------------------------------

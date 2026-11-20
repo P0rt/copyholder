@@ -1,6 +1,7 @@
 // results/confirm.json and results/confirm.md (PREREG.md section 11): the pooled confirmatory
 // numbers of packs B and C, each pack's five rows and verdict (as stage B wrote them, or as
-// confirm scored a pack stage B does not score), a lost pack with its reason, and, with --dev,
+// confirm scored a pack stage B does not score), a lost pack with its reason (or pack C without a
+// recording, when pack B is given alone), and, with --dev,
 // pack A's numbers printed apart as development data. Plain English, every number whether
 // convenient or not, each with its n and the setup line. Pure: no I/O.
 
@@ -9,7 +10,7 @@ import { AFTER_MS, W_MS, round1, round1OrNull } from '../gate/common.ts';
 import { RETUNE_TAG } from '../gate/frozen.ts';
 import { ALPHA, CONFIDENCE, EARLIER_MS, UNDER_MS, WIN_MARGIN_MS, roundOrNull, roundTo } from './common.ts';
 import type { PackFacts } from './facts.ts';
-import type { PackStanding } from './load.ts';
+import type { LostCause, PackStanding } from './load.ts';
 import { shareLine, type ConfirmNumbers, type CountRate, type EqualRateLine, type MedianLine, type ShareLine, type SignLine } from './numbers.ts';
 import { poissonRateInterval } from './stats.ts';
 import type { RetuneTagFacts } from './tag.ts';
@@ -40,10 +41,18 @@ export interface PackSummary {
   facts: PackFacts;
 }
 
-/** A recording that failed for a technical reason after 4:15: reported, not in the numbers (section 11). */
+/**
+ * A pack not in the numbers (section 11): its recording is lost (a technical failure after 4:15, or
+ * the SDK credits ran out), or pack C has no recording because pack B was given alone.
+ */
 export interface LostPack {
   pack: 'B' | 'C';
-  id: string;
+  /** The recording's id; null when the pack has no recording. */
+  id: string | null;
+  cause: LostCause | 'not recorded';
+  /** Whether the lost recording had reached its objection block (4:15); false without a recording. */
+  objectionsBegun: boolean;
+  /** Why the recording does not count; for a pack without a recording, the attempts that failed before 4:15. */
   reasons: string[];
 }
 
@@ -115,8 +124,39 @@ export function packFlags(p: Pick<PackSummary, 'pack' | 'verdict' | 'standing' |
   return out;
 }
 
+/** How a recording was lost, in words: "it failed for a technical reason after ... (4:15)". */
+export function lostPhrase(l: { cause: LostCause; objectionsBegun: boolean }): string {
+  if (l.cause === 'credits') {
+    return `the SDK ended it with kCreditExhausted (the SDK credits were used up) ${l.objectionsBegun ? 'after' : 'before'} its objection block began (4:15)`;
+  }
+  return 'it failed for a technical reason after its objection block began (4:15)';
+}
+
 function lostText(l: LostPack): string {
-  return `pack ${l.pack} (${l.id}) is lost: it failed for a technical reason after its objection block began (4:15), so it is not in the numbers and not replaced (PREREG.md section 11). Reason: ${l.reasons.join('; ')}`;
+  if (l.cause === 'not recorded') {
+    const held = l.reasons.length === 0 ? `no recording of pack ${l.pack}` : `no recording of pack ${l.pack} that reached its objection block (4:15): ${l.reasons.join('; ')}`;
+    return `pack ${l.pack} has no recording: npm run confirm was given pack B alone, and the sessions folder holds ${held}. PREREG.md section 11 allows this when pack C cannot be started for lack of SDK credits`;
+  }
+  return `pack ${l.pack} (${l.id}) is lost: ${lostPhrase({ cause: l.cause, objectionsBegun: l.objectionsBegun })}, so it is not in the numbers and not replaced (PREREG.md section 11). Reason: ${l.reasons.join('; ')}`;
+}
+
+/** "pack C lost", "pack C not recorded". */
+function lostWord(l: Pick<LostPack, 'pack' | 'cause'>): string {
+  return `pack ${l.pack} ${l.cause === 'not recorded' ? 'not recorded' : 'lost'}`;
+}
+
+/**
+ * The flag of numbers from one pack (section 11): with pack C lost or without a recording, the
+ * confirmatory numbers are those of pack B alone (at most 14 valid objections), flagged, with the
+ * same tests; the same holds the other way round.
+ */
+export function aloneFlags(r: Pick<ReportInput, 'packs' | 'lost'>): string[] {
+  if (r.packs.length !== 1 || r.lost.length === 0) return [];
+  const p = r.packs[0]!;
+  const why = r.lost.map((l) => `pack ${l.pack} ${l.cause === 'not recorded' ? 'has no recording' : 'is lost'}`).join(' and ');
+  return [
+    `the confirmatory numbers are those of pack ${p.pack} alone, ${p.verdict.events.valid} valid objections (at most 14), with the same tests, because ${why} (PREREG.md section 11)`,
+  ];
 }
 
 // ---- formatting ---------------------------------------------------------------------------
@@ -496,7 +536,7 @@ export function confirmReport(r: ReportInput): Report {
   const confirmatory = r.tag.problems.length === 0;
   const inNumbers = r.packs.map((p) => `pack ${p.pack}`).join(' and ');
   const md: string[] = [];
-  md.push(r.lost.length === 0 ? '# Pooled confirmation: packs B and C' : `# Confirmation: ${inNumbers}, ${r.lost.map((l) => `pack ${l.pack}`).join(' and ')} lost`, '');
+  md.push(r.lost.length === 0 ? '# Pooled confirmation: packs B and C' : `# Confirmation: ${inNumbers}, ${r.lost.map(lostWord).join(' and ')}`, '');
   if (!confirmatory) {
     md.push(`**Not confirmatory.** These numbers are computed as PREREG.md section 11 says, but a condition of section 11 is not met: ${r.tag.problems.join('; ')}.`, '');
   }
@@ -507,7 +547,8 @@ export function confirmReport(r: ReportInput): Report {
   md.push(`- Setup: ${setup}.`);
   md.push(...frozenLines(r));
   md.push(`- Recordings: ${r.packs.map((p) => `pack ${p.pack} ${p.id} (verdict ${p.verdict.verdict}${p.source === 'confirm' ? ', scored by npm run confirm' : ''}, ${p.verdict.events.valid} valid objections of ${p.verdict.events.cued} cued)`).join('; ')}.`);
-  for (const l of r.lost) md.push(`- Lost: ${lostText(l)}.`);
+  for (const l of r.lost) md.push(`- ${l.cause === 'not recorded' ? 'Not recorded' : 'Lost'}: ${lostText(l)}.`);
+  for (const f of aloneFlags(r)) md.push(`- Flag: ${f}.`);
   for (const p of r.packs) for (const f of packFlags(p)) md.push(`- Flag: ${f}.`);
   md.push(`- Generated ${r.generatedUtc}${r.commit === null ? '' : ` at commit ${r.commit}`} by npm run confirm.`, '');
   md.push(...numbersMarkdown(n, '##'));
@@ -581,7 +622,8 @@ export function confirmReport(r: ReportInput): Report {
     alpha: ALPHA,
     pooled: numbersJson(n),
     packs: r.packs.map(packJson),
-    lost: r.lost.map((l) => ({ pack: l.pack, id: l.id, reasons: l.reasons, note: lostText(l) })),
+    lost: r.lost.map((l) => ({ pack: l.pack, id: l.id, cause: l.cause, objections_begun: l.objectionsBegun, reasons: l.reasons, note: lostText(l) })),
+    flags: aloneFlags(r),
     dev: devJson,
   };
 
@@ -590,7 +632,7 @@ export function confirmReport(r: ReportInput): Report {
     `confirm: ${r.lost.length === 0 ? 'pooled' : 'numbers of'} ${r.packs.map((p) => `pack ${p.pack} (${p.id})`).join(' and ')}; params ${r.params.sha256.slice(0, 8)} (${r.params.variant}, k ${r.params.k.toFixed(1)}); ${setup}`,
   ];
   if (!confirmatory) summary.push(`NOT CONFIRMATORY: ${r.tag.problems.join('; ')}`);
-  for (const l of r.lost) summary.push(`lost: ${lostText(l)}`);
+  for (const l of r.lost) summary.push(`${l.cause === 'not recorded' ? 'not recorded' : 'lost'}: ${lostText(l)}`);
   summary.push(
     `H1: ${n.h1.share.k} of ${n.h1.share.n} valid objections with a stop before the voice, ${pct(n.h1.share.share)} (95% Wilson ${pct(n.h1.share.low)} to ${pct(n.h1.share.high)}); ${
       t === null ? `no test: ${n.h1.noTest ?? 'no chance level'}` : `p0 ${pct(t.p0, 2)} (${n.h1.chance.choice?.source ?? 'n/a'}); exact binomial p ${pText(t.pValue)}, ${t.belowAlpha ? 'at or below' : 'above'} alpha ${t.alpha}`
@@ -600,6 +642,7 @@ export function confirmReport(r: ReportInput): Report {
     `false holds: ${n.falseHolds.count} in ${minText(n.falseHolds.activeMinutes)} active min, ${rateText(n.falseHolds.rate.perMin)}/min (95% ${rateText(n.falseHolds.rate.low)} to ${rateText(n.falseHolds.rate.high)})`,
     `estimate 3 of the chance level: ${SENTENCE_ENDS_NOTE}`,
   );
+  for (const f of aloneFlags(r)) summary.push(`flag: ${f}`);
   for (const p of r.packs) for (const f of packFlags(p)) summary.push(`flag: ${f}`);
   if (r.dev !== null) {
     const d = r.dev.numbers;

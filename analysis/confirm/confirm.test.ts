@@ -1,8 +1,9 @@
 // npm run confirm end to end on synthetic gate recordings (PREREG.md section 11): pack A tuned by
 // stage A, another set chosen by the retune and frozen under gate-retune, packs B and C scored with
 // it by stage A and stage B, then the pooled confirmation and its outputs; a pack that failed
-// quickcheck on condition 6 alone, which confirm scores and keeps, flagged; a pack lost after 4:15;
-// the checks of the tag gate-retune; and each refusal, made before anything is computed.
+// quickcheck on condition 6 alone, which confirm scores and keeps, flagged; a pack lost after 4:15,
+// or ended by kCreditExhausted at any time; pack B alone when pack C has no recording; the checks
+// of the tag gate-retune; and each refusal, made before anything is computed.
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -156,9 +157,9 @@ function expectPlainText(md: string, json: Record<string, unknown>): void {
 // ---- forged copies of a recording (tests only) -------------------------------------------------
 
 /** A copy of a recording under another folder name: big files hard-linked (never written here), the rest copied. */
-function copySession(from: string, to: string): string {
+function copySession(from: string, to: string, root: string = w.sessions): string {
   const src = path.join(w.sessions, from);
-  const dst = path.join(w.sessions, to);
+  const dst = path.join(root, to);
   fs.mkdirSync(dst);
   for (const name of fs.readdirSync(src)) {
     const f = path.join(src, name);
@@ -237,6 +238,20 @@ function failTechnical(dir: string): void {
   });
 }
 
+/**
+ * As host leaves a recording the SDK ended because its credits ran out: the sdk_error line of
+ * events.jsonl (live/host.cjs onSdkError) and quickcheck failing on condition 5, which is technical.
+ */
+function endByCredits(dir: string): void {
+  appendTo(dir, 'events.jsonl', JSON.stringify({ n: null, e: 'sdk_error', by: 'host', code: 4, name: 'kCreditExhausted', message: 'no credits left' }));
+  editJson(dir, 'quickcheck.json', (q) => {
+    q['result'] = 'RE-RECORD NOW';
+    q['reasons'] = ['the SDK reported 1 error(s) (code 4 kCreditExhausted)'];
+    q['technical'] = true;
+    q['checks'] = (q['checks'] as { name: string }[]).map((c) => (c.name === 'no_sdk_error' ? { ...c, ok: false, value: 1 } : c));
+  });
+}
+
 /** Removes the step mark of `name` from stamps.jsonl: Deck never entered that step. */
 function dropStepMark(dir: string, name: string): void {
   const file = path.join(dir, 'stamps.jsonl');
@@ -261,9 +276,10 @@ function forgedB(): string {
   return dir;
 }
 
-/** Runs confirm, which must finish and write its outputs. */
-function confirmed(argv: string[]): Ran {
+/** Runs confirm, which must finish and write its outputs; `env` changes the environment (a sessions folder). */
+function confirmed(argv: string[], env: NodeJS.ProcessEnv = {}): Ran {
   const { deps, results } = freshDeps();
+  Object.assign(deps.env, env);
   const from = w.out.length;
   w.err.length = 0;
   expect(main(argv, deps)).toBe(0);
@@ -276,8 +292,9 @@ function confirmed(argv: string[]): Ran {
 }
 
 /** Runs confirm, which must refuse with `why`, print it and write nothing. */
-function refused(argv: string[], why: RegExp): string {
+function refused(argv: string[], why: RegExp, env: NodeJS.ProcessEnv = {}): string {
   const { deps, results } = freshDeps();
+  Object.assign(deps.env, env);
   w.err.length = 0;
   expect(main(argv, deps)).toBe(1);
   const text = w.err.join('\n');
@@ -389,21 +406,23 @@ afterAll(() => {
 });
 
 describe('the command line', () => {
-  it('takes the two recordings in either order and --dev with the pack A recording', () => {
+  it('takes the two recordings in either order, or one alone, and --dev with the pack A recording', () => {
     expect(parseConfirmArgs(['gate-b', 'gate-c'])).toEqual({ ids: ['gate-b', 'gate-c'], dev: null });
+    expect(parseConfirmArgs(['gate-b', '--dev', 'gate-a'])).toEqual({ ids: ['gate-b'], dev: 'gate-a' });
     expect(parseConfirmArgs(['gate-c', 'gate-b', '--dev', 'gate-a'])).toEqual({ ids: ['gate-c', 'gate-b'], dev: 'gate-a' });
     expect(parseConfirmArgs(['--dev=gate-a', 'gate-b', 'gate-c'])).toEqual({ ids: ['gate-b', 'gate-c'], dev: 'gate-a' });
   });
 
   it('refuses a wrong command line with exit code 2 and the usage', () => {
-    expect(parseConfirmArgs(['gate-b'])).toMatch(/two recording ids are required/);
-    expect(parseConfirmArgs(['gate-b', 'gate-c', 'gate-a'])).toMatch(/two recording ids are required/);
+    expect(parseConfirmArgs([])).toMatch(/one or two recording ids are required: those of packs B and C, or pack B alone when pack C has no recording \(got 0\)/);
+    expect(parseConfirmArgs(['--dev', 'gate-a'])).toMatch(/one or two recording ids are required/);
+    expect(parseConfirmArgs(['gate-b', 'gate-c', 'gate-a'])).toMatch(/one or two recording ids are required.*\(got 3\)/);
     expect(parseConfirmArgs(['gate-b', 'gate-c', '--dev'])).toMatch(/--dev needs the pack A recording id/);
     expect(parseConfirmArgs(['gate-b', 'gate-c', '--dev', 'gate-a', '--dev', 'gate-a'])).toMatch(/--dev is given twice/);
     expect(parseConfirmArgs(['gate-b', 'gate-c', '--exploratory'])).toBe('unknown option --exploratory');
     const { deps, results } = freshDeps();
     w.err.length = 0;
-    expect(main(['gate-b'], deps)).toBe(2);
+    expect(main([], deps)).toBe(2);
     expect(w.err.join('\n')).toContain(USAGE);
     expect(fs.existsSync(results)).toBe(false);
   });
@@ -687,10 +706,14 @@ describe('a pack lost after 4:15 is reported, not replaced; one that failed befo
       {
         pack: 'C',
         id: 'gate-c',
+        cause: 'technical',
+        objections_begun: true,
         reasons: [why],
         note: `pack C (gate-c) is lost: it failed for a technical reason after its objection block began (4:15), so it is not in the numbers and not replaced (PREREG.md section 11). Reason: ${why}`,
       },
     ]);
+    const alone = `the confirmatory numbers are those of pack B alone, ${readVerdict('gate-b').events.valid} valid objections (at most 14), with the same tests, because pack C is lost (PREREG.md section 11)`;
+    expect(r.json['flags']).toEqual([alone]);
     const vb = readVerdict('gate-b');
     expect(r.json['packs'].map((p: { pack: string }) => p.pack)).toEqual(['B']);
     expect(r.json['pooled'].packs).toEqual([{ pack: 'B', id: 'gate-b' }]);
@@ -702,8 +725,10 @@ describe('a pack lost after 4:15 is reported, not replaced; one that failed befo
     expect(r.md.startsWith('# Confirmation: pack B, pack C lost\n')).toBe(true);
     expect(r.md).toContain('Confirmatory numbers over the valid objections of pack B, with the frozen trace detector');
     expect(r.md).toContain(`- Lost: ${r.json['lost'][0].note}.`);
+    expect(r.md).toContain(`- Flag: ${alone}.`);
     expect(r.summary[0]).toMatch(/^confirm: numbers of pack B \(gate-b\); params /);
     expect(r.summary).toContain(`lost: ${r.json['lost'][0].note}`);
+    expect(r.summary).toContain(`flag: ${alone}`);
     expectPlainText(r.md, r.json);
   }, 60_000);
 
@@ -717,12 +742,72 @@ describe('a pack lost after 4:15 is reported, not replaced; one that failed befo
     );
   });
 
+  it('reports a pack the SDK ended with kCreditExhausted before 4:15 as lost, not recorded again, and gives pack B alone, flagged', () => {
+    const dir = copySession('gate-c', 'gate-c-credits-early');
+    withoutStages(dir);
+    endByCredits(dir);
+    dropStepMark(dir, gateSteps('C').objections);
+    const r = confirmed(['gate-c-credits-early', 'gate-b']);
+    const why = 'quickcheck.json says RE-RECORD NOW: the SDK reported 1 error(s) (code 4 kCreditExhausted)';
+    const note = `pack C (gate-c) is lost: the SDK ended it with kCreditExhausted (the SDK credits were used up) before its objection block began (4:15), so it is not in the numbers and not replaced (PREREG.md section 11). Reason: ${why}`;
+    expect(r.json['lost']).toEqual([{ pack: 'C', id: 'gate-c', cause: 'credits', objections_begun: false, reasons: [why], note }]);
+    const vb = readVerdict('gate-b');
+    const alone = `the confirmatory numbers are those of pack B alone, ${vb.events.valid} valid objections (at most 14), with the same tests, because pack C is lost (PREREG.md section 11)`;
+    expect(r.json['flags']).toEqual([alone]);
+    expect(r.json['packs'].map((p: { pack: string }) => p.pack)).toEqual(['B']);
+    expect(r.json['pooled'].packs).toEqual([{ pack: 'B', id: 'gate-b' }]);
+    expect(r.json['pooled'].events).toEqual({ cued: vb.events.cued, valid: vb.events.valid, armed: vb.events.armed, audible_inbreath: vb.events.audible_inbreath });
+    expect(r.json['confirmatory']).toBe(true);
+    expect(r.md.startsWith('# Confirmation: pack B, pack C lost\n')).toBe(true);
+    expect(r.md).toContain(`- Lost: ${note}.`);
+    expect(r.md).toContain(`- Flag: ${alone}.`);
+    expect(r.summary).toContain(`lost: ${note}`);
+    expect(r.summary).toContain(`flag: ${alone}`);
+    expectPlainText(r.md, r.json);
+  }, 60_000);
+
+  it('reports a pack the SDK ended with kCreditExhausted after 4:15 as lost, with that cause', () => {
+    const dir = copySession('gate-c', 'gate-c-credits-late');
+    withoutStages(dir);
+    endByCredits(dir);
+    const r = confirmed(['gate-b', 'gate-c-credits-late']);
+    expect(r.json['lost']).toMatchObject([{ pack: 'C', id: 'gate-c', cause: 'credits', objections_begun: true }]);
+    expect(r.json['lost'][0].note).toMatch(
+      /^pack C \(gate-c\) is lost: the SDK ended it with kCreditExhausted \(the SDK credits were used up\) after its objection block began \(4:15\), so it is not in the numbers and not replaced \(PREREG\.md section 11\)\. Reason: /,
+    );
+    expect(r.json['pooled'].packs).toEqual([{ pack: 'B', id: 'gate-b' }]);
+  }, 60_000);
+
+  it('reads the kCreditExhausted line only from events.jsonl as the record step wrote it', () => {
+    const dir = copySession('gate-c', 'gate-c-credits-added');
+    withoutStages(dir);
+    failTechnical(dir);
+    dropStepMark(dir, gateSteps('C').objections);
+    // The record step holds the hash of events.jsonl, as host writes it (live/host.cjs saveRecording).
+    const events = fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8');
+    reforgeLedger(dir, (r) => (!isNoteLine(r) && r.step === 'record' ? { ...r, out_sha256: { ...r.out_sha256, 'events.jsonl': sha256Hex(events) } } : r));
+    refused(['gate-b', 'gate-c-credits-added'], /pack C \(gate-c\) failed for a technical reason before its objection block began \(4:15\)/);
+    // A kCreditExhausted line added after the recording does not make it lost.
+    appendTo(dir, 'events.jsonl', JSON.stringify({ n: null, e: 'sdk_error', by: 'host', code: 4, name: 'kCreditExhausted', message: 'added later' }));
+    refused(['gate-b', 'gate-c-credits-added'], /pack C \(gate-c\): a file of an earlier step does not match ledger\.jsonl, so nothing is scored \(spec 8\.5\):\n {2}events\.jsonl changed after step record wrote it/);
+  });
+
+  it('does not take the one restart of the SDK, or another SDK error, for the end of the credits', () => {
+    const dir = copySession('gate-c', 'gate-c-other-error');
+    withoutStages(dir);
+    failTechnical(dir);
+    dropStepMark(dir, gateSteps('C').objections);
+    appendTo(dir, 'events.jsonl', JSON.stringify({ n: null, e: 'sdk_error', by: 'host', code: 8, name: 'kCameraFailure', message: 'restart', action: 'reset_restart' }));
+    appendTo(dir, 'events.jsonl', JSON.stringify({ n: null, e: 'sdk_error', by: 'host', code: 1, name: 'kInvalidState', message: 'state' }));
+    refused(['gate-b', 'gate-c-other-error'], /pack C \(gate-c\) failed for a technical reason before its objection block began \(4:15\), so it is not the recording of pack C/);
+  });
+
   it('refuses when both recordings are lost: there are no confirmatory numbers', () => {
     failTechnical(copySession('gate-b', 'gate-b-lost'));
     failTechnical(copySession('gate-c', 'gate-c-lost-too'));
     refused(
       ['gate-c-lost-too', 'gate-b-lost'],
-      /both recordings are lost, each failed for a technical reason after its objection block began \(4:15\), so there are no confirmatory numbers \(PREREG\.md section 11\):\n {2}pack B \(gate-b\): quickcheck\.json says RE-RECORD NOW: microphone processing not off\n {2}pack C \(gate-c\): quickcheck\.json says RE-RECORD NOW/,
+      /both recordings are lost, so there are no confirmatory numbers \(PREREG\.md section 11\):\n {2}pack B \(gate-b\): it failed for a technical reason after its objection block began \(4:15\)\. Reason: quickcheck\.json says RE-RECORD NOW: microphone processing not off\n {2}pack C \(gate-c\): it failed for a technical reason after its objection block began \(4:15\)\. Reason: quickcheck\.json says RE-RECORD NOW/,
     );
   });
 
@@ -744,6 +829,89 @@ describe('a pack lost after 4:15 is reported, not replaced; one that failed befo
     refused(
       ['gate-b', 'gate-c', '--dev', 'gate-a-void'],
       /pack A \(gate-a\) does not count, so it has no numbers: --dev takes the pack A recording with GOOD RECORDING, a valid clock check and its stage B \(PREREG\.md sections 4, 7\.4, 11\):\n {2}quickcheck\.json says RE-RECORD NOW: microphone processing not off/,
+    );
+  });
+});
+
+describe('pack B alone, when pack C has no recording (section 11)', () => {
+  let alone: string;
+
+  beforeAll(() => {
+    alone = path.join(w.base, 'sessions-b-alone');
+    fs.mkdirSync(alone);
+    copySession('gate-b', 'gate-b', alone);
+    // An attempt at pack C that failed for a technical reason before 4:15: section 11 records the pack again.
+    const early = copySession('gate-c', 'gate-c-early', alone);
+    withoutStages(early);
+    failTechnical(early);
+    dropStepMark(early, gateSteps('C').objections);
+  });
+
+  it('gives the numbers of pack B alone, flagged, and says pack C has no recording', () => {
+    const r = confirmed(['gate-b'], { COPYHOLDER_SESSIONS_DIR: alone });
+    const vb = readVerdict('gate-b');
+    const tried = 'the recording gate-c failed for a technical reason before 4:15, so section 11 records the pack again';
+    const note = `pack C has no recording: npm run confirm was given pack B alone, and the sessions folder holds no recording of pack C that reached its objection block (4:15): ${tried}. PREREG.md section 11 allows this when pack C cannot be started for lack of SDK credits`;
+    expect(r.json['lost']).toEqual([{ pack: 'C', id: null, cause: 'not recorded', objections_begun: false, reasons: [tried], note }]);
+    const flag = `the confirmatory numbers are those of pack B alone, ${vb.events.valid} valid objections (at most 14), with the same tests, because pack C has no recording (PREREG.md section 11)`;
+    expect(r.json['flags']).toEqual([flag]);
+    expect(r.json['packs'].map((p: { pack: string }) => p.pack)).toEqual(['B']);
+    expect(r.json['pooled'].packs).toEqual([{ pack: 'B', id: 'gate-b' }]);
+    expect(r.json['pooled'].events).toEqual({ cued: vb.events.cued, valid: vb.events.valid, armed: vb.events.armed, audible_inbreath: vb.events.audible_inbreath });
+    expect(r.json['retune_tag'].recordings.map((x: { pack: string }) => x.pack)).toEqual(['B']);
+    expect(r.json['confirmatory']).toBe(true);
+    expect(r.md.startsWith('# Confirmation: pack B, pack C not recorded\n')).toBe(true);
+    expect(r.md).toContain('Confirmatory numbers over the valid objections of pack B, with the frozen trace detector');
+    expect(r.md).toContain(`- Not recorded: ${note}.`);
+    expect(r.md).toContain(`- Flag: ${flag}.`);
+    expect(r.summary[0]).toMatch(/^confirm: numbers of pack B \(gate-b\); params /);
+    expect(r.summary).toContain(`not recorded: ${note}`);
+    expect(r.summary).toContain(`flag: ${flag}`);
+    expectPlainText(r.md, r.json);
+  }, 60_000);
+
+  it('refuses pack B alone while the sessions folder holds a recording of pack C', () => {
+    refused(['gate-b'], /pack C has a recording, gate-c in .*gate-c, so pack B is not given alone: give it as the second id; it is in the numbers \(PREREG\.md section 11\)$/);
+    const lostC = copySession('gate-c', 'gate-c-lost', alone);
+    try {
+      withoutStages(lostC);
+      failTechnical(lostC);
+      refused(
+        ['gate-b'],
+        /pack C has a recording, gate-c in .*gate-c-lost, so pack B is not given alone: give it as the second id; it is lost \(it failed for a technical reason after its objection block began \(4:15\)\) and is reported as lost \(PREREG\.md section 11\)$/,
+        { COPYHOLDER_SESSIONS_DIR: alone },
+      );
+    } finally {
+      fs.rmSync(lostC, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a pack C recording it cannot read yet, so that nothing of pack C is left out', () => {
+    const fresh = copySession('gate-c', 'gate-c-unread', alone);
+    try {
+      withoutStages(fresh);
+      refused(['gate-b'], /pack C has a recording, gate-c in .*gate-c-unread, so pack B is not given alone: give it as the second id; confirm cannot read it yet: pack C \(gate-c\): stage A has not run/, {
+        COPYHOLDER_SESSIONS_DIR: alone,
+      });
+    } finally {
+      fs.rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses pack C alone: pack B is recorded first', () => {
+    refused(['gate-c'], /gate-c is pack C: one id alone must be the pack B recording, for the numbers of pack B alone when pack C cannot be started for lack of SDK credits \(PREREG\.md section 11\)/);
+  });
+
+  it('refuses pack B alone when pack B is lost: there are no confirmatory numbers', () => {
+    const root = path.join(w.base, 'sessions-b-lost');
+    fs.mkdirSync(root);
+    const b = copySession('gate-b', 'gate-b-lost', root);
+    withoutStages(b);
+    failTechnical(b);
+    refused(
+      ['gate-b-lost'],
+      /pack B is lost and pack C has no recording, so there are no confirmatory numbers \(PREREG\.md section 11\):\n {2}pack B \(gate-b\): it failed for a technical reason after its objection block began \(4:15\)\. Reason: quickcheck\.json says RE-RECORD NOW: microphone processing not off$/,
+      { COPYHOLDER_SESSIONS_DIR: root },
     );
   });
 });

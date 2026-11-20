@@ -1,27 +1,28 @@
 // npm run confirm (PREREG.md section 11): every check first, then stage B's computation again on
 // each recording of pack B and C that is in the numbers (and on pack A with --dev), the pooled
-// numbers, and results/confirm.json and results/confirm.md. Session folders are only read; a
-// refusal writes nothing.
+// numbers, and results/confirm.json and results/confirm.md. Pack B may be given alone when pack C
+// has no recording (section 11: pack C cannot be started for lack of SDK credits). Session folders
+// are only read; a refusal writes nothing.
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { utcSeconds } from '../lib/ledger.ts';
 import { shownPath } from '../lib/paths.ts';
 import { RETUNE_TAG } from '../gate/frozen.ts';
-import { ConfirmRefusal, resultsDir } from './common.ts';
+import { ConfirmRefusal, RecordAgainRefusal, resultsDir } from './common.ts';
 import type { ConfirmDeps } from './deps.ts';
 import { packFacts, requireFactsMatch } from './facts.ts';
-import { inspectPack, readRetunedParams, recomputePack, type PackRecord, type RetunedParams } from './load.ts';
+import { gateRecordingsOf, inspectPack, readRetunedParams, recomputePack, type PackRecord, type RetunedParams } from './load.ts';
 import { confirmNumbers } from './numbers.ts';
-import { confirmReport, repliesCheck, type LostPack, type PackSummary, type Report } from './report.ts';
+import { confirmReport, lostPhrase, repliesCheck, type LostPack, type PackSummary, type Report } from './report.ts';
 import { retuneTagFacts } from './tag.ts';
 
 export const CONFIRM_JSON = 'confirm.json';
 export const CONFIRM_MD = 'confirm.md';
 
 export interface ConfirmOptions {
-  /** The recordings of packs B and C, in either order (ids or folders). */
-  ids: readonly [string, string];
+  /** The recordings of packs B and C, in either order (ids or folders); pack B alone when pack C has no recording. */
+  ids: readonly string[];
   /** The pack A recording, for its numbers as development data; null without --dev. */
   dev: string | null;
   deps: ConfirmDeps;
@@ -34,37 +35,91 @@ export interface ConfirmOutcome extends Report {
 
 const short = (sha: string): string => sha.slice(0, 8);
 
-export interface CheckedPair {
-  /** The two recordings, pack B first. */
-  packs: [PackRecord, PackRecord];
+/** Pack C without a recording, when pack B is given alone (section 11). */
+export interface NotRecorded {
+  pack: 'C';
+  /** Ids of pack C recordings that failed for a technical reason before 4:15, which section 11 records again. */
+  attempts: string[];
+}
+
+export interface CheckedPacks {
+  /** The recordings given, pack B first. */
+  packs: PackRecord[];
   /** Those in the numbers (they count, or failed quickcheck on condition 6 alone), pack B first. */
   scored: PackRecord[];
-  /** Those lost after 4:15 (section 11). */
+  /** Those lost: after 4:15, or ended by kCreditExhausted (section 11). */
   lost: PackRecord[];
+  /** Pack C when pack B is given alone; null with two recordings. */
+  notRecorded: NotRecorded | null;
   params: RetunedParams;
 }
 
-/**
- * The checks of section 11 across recordings: two different recordings, one of pack B and one of
- * pack C, at least one of them in the numbers, and every stage A among them run on the same
- * params, which are params/frozen.json as the retune froze it.
- */
-export function checkPair(recs: readonly [PackRecord, PackRecord], deps: Pick<ConfirmDeps, 'env' | 'tagFile'>): CheckedPair {
-  const [x, y] = recs;
+/** "  pack C (gate-c): it failed for a technical reason after ... Reason: ..." for a refusal. */
+function lostLine(r: PackRecord): string {
+  return `  pack ${r.pack} (${r.id}): ${lostPhrase(r.lost ?? { cause: 'technical', objectionsBegun: true })}. Reason: ${r.voidReasons.join('; ')}`;
+}
+
+/** Two different recordings, one of pack B and one of pack C, pack B first. */
+function pairOf(x: PackRecord, y: PackRecord): PackRecord[] {
   if (path.resolve(x.dir) === path.resolve(y.dir)) throw new ConfirmRefusal(`${x.arg} and ${y.arg} are the same recording: give the recordings of packs B and C`);
   if (x.pack === y.pack) {
     throw new ConfirmRefusal(`${x.id} and ${y.id} are both pack ${x.pack}: the confirmation pools one recording of pack B and one of pack C (PREREG.md section 11)`);
   }
-  const packs: [PackRecord, PackRecord] = x.pack === 'B' ? [x, y] : [y, x];
+  return x.pack === 'B' ? [x, y] : [y, x];
+}
+
+/**
+ * Pack B given alone (section 11: pack C cannot be started for lack of SDK credits): the one
+ * recording is pack B's, and the sessions folder holds no recording of pack C but those that
+ * failed for a technical reason before 4:15, which section 11 records again. A pack C recording
+ * in the numbers, a lost one, or one confirm cannot read yet is refused: it is given as the
+ * second id, so that nothing of pack C is left out of the report.
+ */
+function notRecordedC(b: PackRecord, env: NodeJS.ProcessEnv): NotRecorded {
+  if (b.pack !== 'B') {
+    throw new ConfirmRefusal(
+      `${b.id} is pack ${b.pack}: one id alone must be the pack B recording, for the numbers of pack B alone when pack C cannot be started for lack of SDK credits (PREREG.md section 11); pack B is recorded before pack C, so give the pack B recording too, and a lost one is reported as lost`,
+    );
+  }
+  const attempts: string[] = [];
+  for (const c of gateRecordingsOf('C', env)) {
+    let state: string;
+    try {
+      const r = inspectPack(c.dir, 'confirm', env);
+      state = r.standing === 'lost' ? `it is lost (${lostPhrase(r.lost ?? { cause: 'technical', objectionsBegun: true })}) and is reported as lost` : 'it is in the numbers';
+    } catch (e) {
+      if (e instanceof RecordAgainRefusal) {
+        attempts.push(c.id);
+        continue;
+      }
+      if (!(e instanceof ConfirmRefusal)) throw e;
+      state = `confirm cannot read it yet: ${e.message}`;
+    }
+    throw new ConfirmRefusal(
+      `pack C has a recording, ${c.id} in ${shownPath(c.dir)}, so pack B is not given alone: give it as the second id; ${state} (PREREG.md section 11)`,
+    );
+  }
+  return { pack: 'C', attempts };
+}
+
+/**
+ * The checks of section 11 across recordings: two different recordings, one of pack B and one of
+ * pack C, or pack B alone when pack C has no recording; at least one recording in the numbers;
+ * and every stage A among them run on the same params, which are params/frozen.json as the retune
+ * froze it.
+ */
+export function checkPacks(recs: readonly PackRecord[], deps: Pick<ConfirmDeps, 'env' | 'tagFile'>): CheckedPacks {
+  if (recs.length !== 1 && recs.length !== 2) throw new ConfirmRefusal(`one or two recordings are checked, not ${recs.length}`);
+  const packs = recs.length === 2 ? pairOf(recs[0]!, recs[1]!) : [recs[0]!];
+  const notRecorded = recs.length === 1 ? notRecordedC(recs[0]!, deps.env) : null;
   const scored = packs.filter((r) => r.standing !== 'lost');
   const lost = packs.filter((r) => r.standing === 'lost');
   if (scored.length === 0) {
-    throw new ConfirmRefusal(
-      [
-        'both recordings are lost, each failed for a technical reason after its objection block began (4:15), so there are no confirmatory numbers (PREREG.md section 11):',
-        ...lost.map((r) => `  pack ${r.pack} (${r.id}): ${r.voidReasons.join('; ')}`),
-      ].join('\n'),
-    );
+    const head =
+      notRecorded === null
+        ? 'both recordings are lost, so there are no confirmatory numbers (PREREG.md section 11):'
+        : 'pack B is lost and pack C has no recording, so there are no confirmatory numbers (PREREG.md section 11):';
+    throw new ConfirmRefusal([head, ...lost.map(lostLine)].join('\n'));
   }
   const staged = scored.filter((r): r is PackRecord & { stageASha256: string } => r.stageASha256 !== null);
   const [b, c] = staged;
@@ -81,7 +136,7 @@ export function checkPair(recs: readonly [PackRecord, PackRecord], deps: Pick<Co
       );
     }
   }
-  return { packs, scored, lost, params };
+  return { packs, scored, lost, notRecorded, params };
 }
 
 /** Stage B's computation again on one recording, and what the report shows of it. */
@@ -126,8 +181,8 @@ export function runConfirm(o: ConfirmOptions): ConfirmOutcome {
 
   // Checks first; nothing is computed until every one has passed (section 11): each recording,
   // the pair and the params, the pack A recording, and the tag gate-retune.
-  const recs: [PackRecord, PackRecord] = [inspectPack(o.ids[0], 'confirm', env), inspectPack(o.ids[1], 'confirm', env)];
-  const { packs, scored, lost, params } = checkPair(recs, deps);
+  const recs = o.ids.map((id) => inspectPack(id, 'confirm', env));
+  const { packs, scored, lost, notRecorded, params } = checkPacks(recs, deps);
   const devRec = o.dev === null ? null : inspectPack(o.dev, 'dev', env);
   const tag = retuneTagFacts(
     packs.map((r) => ({ pack: r.pack, id: r.id, startedUtc: r.startedUtc })),
@@ -137,7 +192,23 @@ export function runConfirm(o: ConfirmOptions): ConfirmOutcome {
   // Stage B's computation again, one recording at a time (each holds its audio only while it runs).
   const summaries = scored.map((rec) => summaryOf(rec, params, env));
   const devSummary = devRec === null ? null : summaryOf(devRec, params, env);
-  const lostPacks: LostPack[] = lost.map((r) => ({ pack: r.pack as 'B' | 'C', id: r.id, reasons: r.voidReasons }));
+  const lostPacks: LostPack[] = lost.map((r) => ({
+    pack: r.pack as 'B' | 'C',
+    id: r.id,
+    cause: r.lost?.cause ?? 'technical',
+    objectionsBegun: r.lost?.objectionsBegun ?? true,
+    reasons: r.voidReasons,
+  }));
+  if (notRecorded !== null) {
+    const tried = notRecorded.attempts;
+    lostPacks.push({
+      pack: notRecorded.pack,
+      id: null,
+      cause: 'not recorded',
+      objectionsBegun: false,
+      reasons: tried.length === 0 ? [] : [`${tried.length === 1 ? 'the recording' : 'the recordings'} ${tried.join(', ')} failed for a technical reason before 4:15, so section 11 records the pack again`],
+    });
+  }
 
   const report = confirmReport({
     generatedUtc: utcSeconds(deps.now()),

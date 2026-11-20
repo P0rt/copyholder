@@ -29,6 +29,18 @@ export class ConfirmRefusal extends Error {
   }
 }
 
+/**
+ * The refusal of a recording of pack B or C that failed for a technical reason before its objection
+ * block began (4:15), the SDK credits aside: by section 11 the pack is recorded again, so this
+ * recording is not the pack's.
+ */
+export class RecordAgainRefusal extends ConfirmRefusal {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RecordAgainRefusal';
+  }
+}
+
 /** results/ of the repository, or COPYHOLDER_RESULTS_DIR when set (tests write to temporary folders). */
 export function resultsDir(env: NodeJS.ProcessEnv = process.env): string {
   const v = env['COPYHOLDER_RESULTS_DIR'];
