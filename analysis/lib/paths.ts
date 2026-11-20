@@ -11,6 +11,14 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 /** Session id as host names folders (core/schemas SESSION_ID): gate-a, doctor-3, s1. */
 const SESSION_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
+/**
+ * Whether `s` is a session id as host names folders: sessionDirOf looks for such a name in the
+ * sessions folder, and takes anything else as a folder path.
+ */
+export function isSessionId(s: string): boolean {
+  return SESSION_ID.test(s);
+}
+
 /** sessions/ of the repository, or COPYHOLDER_SESSIONS_DIR when set (live/lib/paths.cjs). */
 export function sessionsDir(env: NodeJS.ProcessEnv = process.env): string {
   const v = env['COPYHOLDER_SESSIONS_DIR'];
@@ -31,7 +39,7 @@ export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
  * slash, an absolute path, a name that is not an id) is taken as a folder path.
  */
 export function sessionDirOf(idOrDir: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (SESSION_ID.test(idOrDir)) return path.join(sessionsDir(env), idOrDir);
+  if (isSessionId(idOrDir)) return path.join(sessionsDir(env), idOrDir);
   return path.resolve(idOrDir);
 }
 

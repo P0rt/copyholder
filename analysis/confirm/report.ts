@@ -1,14 +1,15 @@
 // results/confirm.json and results/confirm.md (PREREG.md section 11): the pooled confirmatory
 // numbers of packs B and C, each pack's five rows and verdict (as stage B wrote them, or as
 // confirm scored a pack stage B does not score), a lost pack with its reason (or pack C without a
-// recording, when pack B is given alone), and, with --dev,
+// recording, when pack B is given alone), each later recording of a pack, which is not in the
+// numbers, each folder of pack B or C that no SDK measured, which is not counted, and, with --dev,
 // pack A's numbers printed apart as development data. Plain English, every number whether
 // convenient or not, each with its n and the setup line. Pure: no I/O.
 
 import type { Verdict } from '../../core/schemas/index.ts';
 import { AFTER_MS, W_MS, round1, round1OrNull } from '../gate/common.ts';
 import { RETUNE_TAG } from '../gate/frozen.ts';
-import { ALPHA, CONFIDENCE, EARLIER_MS, UNDER_MS, WIN_MARGIN_MS, roundOrNull, roundTo } from './common.ts';
+import { ALPHA, CONFIDENCE, EARLIER_MS, UNDER_MS, WIN_MARGIN_MS, givenName, namedIn, roundOrNull, roundTo } from './common.ts';
 import type { PackFacts } from './facts.ts';
 import type { LostCause, PackStanding } from './load.ts';
 import { shareLine, type ConfirmNumbers, type CountRate, type EqualRateLine, type MedianLine, type ShareLine, type SignLine } from './numbers.ts';
@@ -26,6 +27,8 @@ const CONDITION_6 = 'voice_after_cues';
 /** One recording in the numbers, as the report shows it. */
 export interface PackSummary {
   id: string;
+  /** The name of its folder, which differs from the id when an operator renamed the folder. */
+  folder: string;
   pack: 'A' | 'B' | 'C';
   sdkVersion: string | null;
   standing: Exclude<PackStanding, 'lost'>;
@@ -49,11 +52,45 @@ export interface LostPack {
   pack: 'B' | 'C';
   /** The recording's id; null when the pack has no recording. */
   id: string | null;
+  /** The name of the recording's folder, which differs from the id when an operator renamed the folder; null without a recording. */
+  folder: string | null;
   cause: LostCause | 'not recorded';
   /** Whether the lost recording had reached its objection block (4:15); false without a recording. */
   objectionsBegun: boolean;
   /** Why the recording does not count; for a pack without a recording, the attempts that failed before 4:15. */
   reasons: string[];
+}
+
+/**
+ * A recording of pack B or C made after the one given for that pack, and not an attempt that
+ * failed for a technical reason before 4:15 (section 11): not in the numbers, since section 11
+ * records a pack again only after such a failure and does not replace a lost recording.
+ */
+export interface LaterRecording {
+  pack: 'B' | 'C';
+  id: string;
+  /** The name of its folder, which differs from the id when an operator renamed the folder. */
+  folder: string;
+  /** The recording given for that pack. */
+  after: string;
+  /** The name of the folder of the recording given. */
+  afterFolder: string;
+  /** Whether the recording given is lost. */
+  afterLost: boolean;
+}
+
+/**
+ * A folder of pack B or C in the sessions folder that no SDK measured (manifest.json dry, a tap
+ * other than the real one, or sdk null; analysis/pack/rules.ts whyNotMeasured): no recording of the
+ * pack, so it is not counted, and the report lists it (spec 6.5, section 11).
+ */
+export interface NotCountedFolder {
+  pack: 'B' | 'C';
+  /** manifest.json id, or the folder name when the manifest has none. */
+  id: string;
+  folder: string;
+  /** What its manifest.json says, as whyNotMeasured gives it. */
+  why: string;
 }
 
 export interface ParamsSummary {
@@ -75,6 +112,15 @@ export interface ReportInput {
   /** The recordings in the numbers, pack B before pack C. */
   packs: readonly PackSummary[];
   lost: readonly LostPack[];
+  /** Recordings made after the one given for their pack, which are not in the numbers. */
+  later: readonly LaterRecording[];
+  /** Folders of packs B and C that no SDK measured, which are not counted. */
+  notCounted: readonly NotCountedFolder[];
+  /**
+   * Why the numbers are not confirmatory beyond the tag: a run no SDK measured reached the objection
+   * block of a pack before the recording of that pack in the numbers (sections 7.1, 11).
+   */
+  heardBefore: readonly string[];
   pooled: ConfirmNumbers;
   dev: { pack: PackSummary; numbers: ConfirmNumbers } | null;
 }
@@ -137,7 +183,27 @@ function lostText(l: LostPack): string {
     const held = l.reasons.length === 0 ? `no recording of pack ${l.pack}` : `no recording of pack ${l.pack} that reached its objection block (4:15): ${l.reasons.join('; ')}`;
     return `pack ${l.pack} has no recording: npm run confirm was given pack B alone, and the sessions folder holds ${held}. PREREG.md section 11 allows this when pack C cannot be started for lack of SDK credits`;
   }
-  return `pack ${l.pack} (${l.id}) is lost: ${lostPhrase({ cause: l.cause, objectionsBegun: l.objectionsBegun })}, so it is not in the numbers and not replaced (PREREG.md section 11). Reason: ${l.reasons.join('; ')}`;
+  // A recording whose folder an operator renamed is named with its folder: host may have given its id to a later one.
+  const self = l.id === null || l.folder === null ? String(l.id) : namedIn(l.id, l.folder);
+  return `pack ${l.pack} (${self}) is lost: ${lostPhrase({ cause: l.cause, objectionsBegun: l.objectionsBegun })}, so it is not in the numbers and not replaced (PREREG.md section 11). Reason: ${l.reasons.join('; ')}`;
+}
+
+/**
+ * "pack C (gate-c-2) was recorded after gate-c and is not in the numbers: ...". A folder whose name
+ * is not the id is named too, and the recording given by the name to give it under (common.ts
+ * givenName): "after gate-c-failed (the folder of gate-c)".
+ */
+export function laterText(l: LaterRecording): string {
+  const after = givenName(l.after, l.afterFolder);
+  const self = namedIn(l.id, l.folder);
+  const why = l.afterLost ? `${after} is lost, and PREREG.md section 11 does not replace a lost recording` : `${after} is the recording of pack ${l.pack} in the numbers (PREREG.md section 11)`;
+  return `pack ${l.pack} (${self}) was recorded after ${after} and is not in the numbers: ${why}`;
+}
+
+/** "the folder gate-c-mock (pack C, id gate-c) holds no recording the SDK measured: ...". */
+export function notCountedText(f: NotCountedFolder): string {
+  const which = f.folder === f.id ? `pack ${f.pack}` : `pack ${f.pack}, id ${f.id}`;
+  return `the folder ${f.folder} (${which}) holds no recording the SDK measured: its manifest.json says ${f.why}, so it is not a recording of pack ${f.pack} and is not counted (spec 6.5, PREREG.md section 11)`;
 }
 
 /** "pack C lost", "pack C not recorded". */
@@ -379,6 +445,7 @@ function packJson(p: PackSummary): Record<string, unknown> {
   return {
     pack: p.pack,
     id: p.id,
+    folder: p.folder,
     sdk_version: p.sdkVersion,
     standing: p.standing,
     verdict_by: p.source,
@@ -521,10 +588,11 @@ function frozenLines(r: ReportInput): string[] {
   lines.push(`- Stage A and stage B: ${stageA.join('; ')}.`);
   const starts = t.recordings.map((s) => `pack ${s.pack} started ${s.startedUtc}`).join(', ');
   lines.push(`- The tag ${RETUNE_TAG}: ${t.tagTime === null ? 'git gives no time for it' : `made ${t.tagTime} (the time git gives the tag)`}; ${starts}.`);
+  const code = `- The pooled analysis code, every module npm run confirm loads (${plural(t.codeFiles.length, 'file', 'files')}, listed in confirm.json under retune_tag.code_files),`;
   lines.push(
     t.codeDifferences.length === 0
-      ? `- The pooled analysis code (${plural(t.codeFiles.length, 'file', 'files')}: ${t.codeFiles.join(', ')}) equals its copy under the tag ${RETUNE_TAG}.`
-      : `- The pooled analysis code differs from its copy under the tag ${RETUNE_TAG}: ${t.codeDifferences.join('; ')}.`,
+      ? `${code} equals its copy under the tag ${RETUNE_TAG}.`
+      : `${code} differs from its copy under the tag ${RETUNE_TAG}: ${t.codeDifferences.join('; ')}.`,
   );
   return lines;
 }
@@ -533,12 +601,14 @@ function frozenLines(r: ReportInput): string[] {
 export function confirmReport(r: ReportInput): Report {
   const n = r.pooled;
   const setup = setupLine(r.packs, n.cued, n.valid);
-  const confirmatory = r.tag.problems.length === 0;
+  // Section 11 conditions the numbers do not meet: the tag, then a pack heard before its recording.
+  const problems = [...r.tag.problems, ...r.heardBefore];
+  const confirmatory = problems.length === 0;
   const inNumbers = r.packs.map((p) => `pack ${p.pack}`).join(' and ');
   const md: string[] = [];
   md.push(r.lost.length === 0 ? '# Pooled confirmation: packs B and C' : `# Confirmation: ${inNumbers}, ${r.lost.map(lostWord).join(' and ')}`, '');
   if (!confirmatory) {
-    md.push(`**Not confirmatory.** These numbers are computed as PREREG.md section 11 says, but a condition of section 11 is not met: ${r.tag.problems.join('; ')}.`, '');
+    md.push(`**Not confirmatory.** These numbers are computed as PREREG.md section 11 says, but a condition of section 11 is not met: ${problems.join('; ')}.`, '');
   }
   md.push(
     `PREREG.md section 11. ${r.lost.length === 0 ? 'Confirmatory numbers, pooled over the valid objections of packs B and C' : `Confirmatory numbers over the valid objections of ${inNumbers}`}, with the frozen trace detector, automatic onsets and virtual stops (section 3.1). Every number carries its n.`,
@@ -546,8 +616,12 @@ export function confirmReport(r: ReportInput): Report {
   );
   md.push(`- Setup: ${setup}.`);
   md.push(...frozenLines(r));
-  md.push(`- Recordings: ${r.packs.map((p) => `pack ${p.pack} ${p.id} (verdict ${p.verdict.verdict}${p.source === 'confirm' ? ', scored by npm run confirm' : ''}, ${p.verdict.events.valid} valid objections of ${p.verdict.events.cued} cued)`).join('; ')}.`);
+  md.push(
+    `- Recordings: ${r.packs.map((p) => `pack ${p.pack} ${namedIn(p.id, p.folder)} (verdict ${p.verdict.verdict}${p.source === 'confirm' ? ', scored by npm run confirm' : ''}, ${p.verdict.events.valid} valid objections of ${p.verdict.events.cued} cued)`).join('; ')}.`,
+  );
   for (const l of r.lost) md.push(`- ${l.cause === 'not recorded' ? 'Not recorded' : 'Lost'}: ${lostText(l)}.`);
+  for (const l of r.later) md.push(`- Recorded later: ${laterText(l)}.`);
+  for (const f of r.notCounted) md.push(`- Not counted: ${notCountedText(f)}.`);
   for (const f of aloneFlags(r)) md.push(`- Flag: ${f}.`);
   for (const p of r.packs) for (const f of packFlags(p)) md.push(`- Flag: ${f}.`);
   md.push(`- Generated ${r.generatedUtc}${r.commit === null ? '' : ` at commit ${r.commit}`} by npm run confirm.`, '');
@@ -589,7 +663,7 @@ export function confirmReport(r: ReportInput): Report {
     schema: CONFIRM_SCHEMA,
     prereg: 'PREREG.md section 11',
     confirmatory,
-    not_confirmatory_because: r.tag.problems,
+    not_confirmatory_because: problems,
     generated_utc: r.generatedUtc,
     commit: r.commit,
     params: {
@@ -622,7 +696,9 @@ export function confirmReport(r: ReportInput): Report {
     alpha: ALPHA,
     pooled: numbersJson(n),
     packs: r.packs.map(packJson),
-    lost: r.lost.map((l) => ({ pack: l.pack, id: l.id, cause: l.cause, objections_begun: l.objectionsBegun, reasons: l.reasons, note: lostText(l) })),
+    lost: r.lost.map((l) => ({ pack: l.pack, id: l.id, folder: l.folder, cause: l.cause, objections_begun: l.objectionsBegun, reasons: l.reasons, note: lostText(l) })),
+    recorded_later: r.later.map((l) => ({ pack: l.pack, id: l.id, folder: l.folder, after: l.after, after_folder: l.afterFolder, note: laterText(l) })),
+    not_counted: r.notCounted.map((f) => ({ pack: f.pack, id: f.id, folder: f.folder, why: f.why, note: notCountedText(f) })),
     flags: aloneFlags(r),
     dev: devJson,
   };
@@ -631,8 +707,10 @@ export function confirmReport(r: ReportInput): Report {
   const summary = [
     `confirm: ${r.lost.length === 0 ? 'pooled' : 'numbers of'} ${r.packs.map((p) => `pack ${p.pack} (${p.id})`).join(' and ')}; params ${r.params.sha256.slice(0, 8)} (${r.params.variant}, k ${r.params.k.toFixed(1)}); ${setup}`,
   ];
-  if (!confirmatory) summary.push(`NOT CONFIRMATORY: ${r.tag.problems.join('; ')}`);
+  if (!confirmatory) summary.push(`NOT CONFIRMATORY: ${problems.join('; ')}`);
   for (const l of r.lost) summary.push(`${l.cause === 'not recorded' ? 'not recorded' : 'lost'}: ${lostText(l)}`);
+  for (const l of r.later) summary.push(`recorded later: ${laterText(l)}`);
+  for (const f of r.notCounted) summary.push(`not counted: ${notCountedText(f)}`);
   summary.push(
     `H1: ${n.h1.share.k} of ${n.h1.share.n} valid objections with a stop before the voice, ${pct(n.h1.share.share)} (95% Wilson ${pct(n.h1.share.low)} to ${pct(n.h1.share.high)}); ${
       t === null ? `no test: ${n.h1.noTest ?? 'no chance level'}` : `p0 ${pct(t.p0, 2)} (${n.h1.chance.choice?.source ?? 'n/a'}); exact binomial p ${pText(t.pValue)}, ${t.belowAlpha ? 'at or below' : 'above'} alpha ${t.alpha}`
