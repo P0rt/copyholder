@@ -1,17 +1,22 @@
-// A published gate set data/<id>/ as replay reads it (spec 8.7, 12.4). Replay reads seven of its
+// A published gate set data/<id>/ as replay reads it (spec 8.7, 12.4). Replay reads nine of its
 // files, each checked with its own validator from core/schemas: manifest.json (the public copy),
-// stream.jsonl, onsets.json, calib.json, clock_report.json, verdict.json, and verdict.md, which
-// recompute.ts checks against the text stage B writes from verdict.json. It reads nothing else of a
-// set as main's pack writes it: stage B scores neither events.jsonl nor audio_env.json.
+// stream.jsonl, marks.jsonl, g_resets.json, onsets.json, calib.json, clock_report.json,
+// verdict.json, and verdict.md, which recompute.ts checks against the text stage B writes from
+// verdict.json. It reads nothing else: stage B scores neither events.jsonl nor audio_env.json.
 //
-// Two things stage B reads are in no published file (spec 8.7): the cues and the step marks of its
-// layout, which come from the "mark" lines of stamps.jsonl (analysis/gate/view.ts gateLayout and
-// scoredCues), and which packets with g null are reset frames of G, which comes from lm of the "m"
-// lines of samples.jsonl (analysis/rivals/g.ts gResetSeqs). stream.jsonl keeps only the "arr"
-// stamps, as nArr, and events.jsonl holds no mark. A set may carry both in two optional files,
-// MARKS_FILE and RESETS_FILE (an assumption: pack does not write them, see README.md); without them
-// every value that needs them is "not recomputable from the set". Like stream.jsonl, they are
-// trusted as published: nothing else in the set ties them to the recording, beyond the checks here.
+// Two things stage B reads come from files that are never published (spec 8.7): the cues and the
+// step marks of its layout, from the "mark" lines of stamps.jsonl (analysis/gate/view.ts gateLayout
+// and scoredCues), and which packets with g null are reset frames of G, from lm of the "m" lines of
+// samples.jsonl (analysis/rivals/g.ts gResetSeqs). stream.jsonl keeps only the "arr" stamps, as
+// nArr, and events.jsonl holds no mark. So pack writes both into a gate set (analysis/pack.ts):
+// MARKS_FILE, the mark lines as they are, and RESETS_FILE, the packets gResetSeqs finds. A set
+// without them (from an earlier pack, or with a file taken out) still replays, and every value that
+// needs them is then "not recomputable from the set". Like stream.jsonl, they are trusted as
+// published: nothing else in the set ties them to the recording, beyond the checks here.
+//
+// A gate set without verdict.json is the set of a recording that never reached its verdict, for
+// which pack writes no verdict files (PREREG sections 7 and 11): replay reads and checks its files
+// and has no verdict to recompute (readSetFolder, VerdictlessSet).
 //
 // Replay reads the files of the set folder only: a file that leads out of it through a link is
 // refused, and so is any path inside gate/ or sample/ (unreadPathWhy).
@@ -25,17 +30,18 @@ import {
   SESSION_ID,
   validateCalib,
   validateClockReport,
+  validateGResets,
+  validateMarkLine,
   validateOnsets,
   validatePublishedManifest,
-  validateStampLine,
   validateStreamLine,
   validateVerdict,
   whyNoPublishedSet,
   type Calib,
   type ClockReport,
   type Manifest,
+  type MarkLine,
   type Onsets,
-  type StampLine,
   type Validator,
   type Verdict,
 } from '../../core/schemas/index.ts';
@@ -58,19 +64,17 @@ export const SET_FILES = {
 } as const;
 
 /**
- * The "mark" lines of stamps.jsonl ({"k":"mark","what":"step"|"cue"|"key"}), in file order. Not
- * part of data/<id>/ on main (core/schemas PUBLISHED_FILES): pack would have to write it.
+ * The "mark" lines of stamps.jsonl ({"k":"mark","what":"step"|"cue"|"key"}) as they are, in file
+ * order (core/schemas validateMarkLine). Pack writes it into a gate set (analysis/pack.ts marksJsonl).
  */
 export const MARKS_FILE = 'marks.jsonl';
 
 /**
  * The packets of stream.jsonl that stage B read as reset frames of G: {"schema":"g-resets/1",
  * "seqs":[...]}, the seqs of rivals gResetSeqs(detector_in.jsonl, samples.jsonl) in ascending
- * order. Not part of data/<id>/ on main either: pack would write it from samples.jsonl, with
- * MARKS_FILE (README.md).
+ * order (core/schemas validateGResets). Pack writes it into a gate set (analysis/pack.ts gResetsJson).
  */
 export const RESETS_FILE = 'g_resets.json';
-export const RESETS_SCHEMA = 'g-resets/1';
 
 /** A set replay cannot read or score: the message says what is wrong and what to do. */
 export class ReplayRefusal extends Error {
@@ -98,9 +102,29 @@ export interface PublishedSet {
   /** The text of verdict.md. */
   verdictMd: string;
   /** The mark lines of MARKS_FILE; null when the set has no such file. */
-  marks: StampLine[] | null;
+  marks: MarkLine[] | null;
   /** The reset frames RESETS_FILE lists; null when the set has no such file. */
   resets: Set<number> | null;
+}
+
+/**
+ * A gate set without verdict.json. Pack writes one for a recording that never reached its verdict,
+ * because it does not count or stage B has not run on it (PREREG sections 7 and 11); pack A's set
+ * of such a recording ends at the step mark of the objection block, without onsets.json (PREREG
+ * section 7.5). Each file it holds is read and checked as in a set with a verdict; there is no
+ * verdict to recompute.
+ */
+export interface VerdictlessSet {
+  dir: string;
+  name: string;
+  id: string;
+  pack: 'A' | 'B' | 'C';
+  manifest: Manifest;
+  verdict: null;
+  onsets: Onsets | null;
+  clockReport: ClockReport | null;
+  /** The files of the set replay read and checked, in the order pack writes them. */
+  read: string[];
 }
 
 /**
@@ -191,36 +215,25 @@ function readSetFile(dir: string, realDir: string, file: string): string | null 
   return fs.readFileSync(real, 'utf8');
 }
 
-/** The seqs of RESETS_FILE, checked against stream.jsonl; a refusal says what is wrong. */
+/** The seqs of RESETS_FILE (core/schemas validateGResets), checked against stream.jsonl; a refusal says what is wrong. */
 function resetsOf(text: string, where: string, inputs: readonly DetectorInput[]): Set<number> {
-  let v: unknown;
-  try {
-    v = JSON.parse(text);
-  } catch (e) {
-    throw new ReplayRefusal(`${where} is not valid JSON: ${(e as Error).message}`);
-  }
-  const form = `{"schema":"${RESETS_SCHEMA}","seqs":[...]}`;
-  if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new ReplayRefusal(`${where} is not a JSON object: it holds ${form}`);
-  const o = v as Record<string, unknown>;
-  const extra = Object.keys(o).filter((k) => k !== 'schema' && k !== 'seqs');
-  if (o['schema'] !== RESETS_SCHEMA || !Array.isArray(o['seqs']) || extra.length > 0) {
-    throw new ReplayRefusal(`${where} must hold exactly ${form}${extra.length > 0 ? `, not ${extra.join(', ')}` : ''}`);
-  }
-  const seqs = o['seqs'] as unknown[];
+  const p = parseJson(text, validateGResets, { file: RESETS_FILE });
+  if (p.value === null) throw new ReplayRefusal(`${where} is not valid (core/schemas):\n  ${problemList(p.errors)}`);
   const gNull = new Set(inputs.flatMap((r) => (r.k === 'batch' && r.g === null ? [r.seq] : [])));
-  let last = -1;
-  for (const s of seqs) {
-    if (typeof s !== 'number' || !Number.isInteger(s) || s <= last) {
-      throw new ReplayRefusal(`${where}: seqs must be packet numbers in ascending order, each once; found ${JSON.stringify(s)} after ${last}`);
-    }
-    if (!gNull.has(s)) {
-      throw new ReplayRefusal(
-        `${where} lists seq ${s}, which is no packet of stream.jsonl with g null: live/reduce.cjs writes g null on every reset frame, so the file is not the one of this set; fetch the whole folder again`,
-      );
-    }
-    last = s;
+  const other = p.value.seqs.find((seq) => !gNull.has(seq));
+  if (other !== undefined) {
+    throw new ReplayRefusal(
+      `${where} lists seq ${other}, which is no packet of stream.jsonl with g null: live/reduce.cjs writes g null on every reset frame, so the file is not the one of this set; fetch the whole folder again`,
+    );
   }
-  return new Set(seqs as number[]);
+  return new Set(p.value.seqs);
+}
+
+/** The lines of MARKS_FILE (core/schemas validateMarkLine); a refusal says what is wrong. */
+function marksOf(text: string, where: string): MarkLine[] {
+  const m = parseJsonl(text, validateMarkLine, { file: MARKS_FILE });
+  if (m.errors.length > 0) throw new ReplayRefusal(`${where} is not valid (core/schemas):\n  ${problemList(m.errors)}`);
+  return m.rows;
 }
 
 /**
@@ -230,7 +243,7 @@ function resetsOf(text: string, where: string, inputs: readonly DetectorInput[])
  * as the onsets step searched it: going at the cue or starting after it, its voice onset at most
  * 10 s after it. Problems in plain words; none for marks that fit.
  */
-export function marksProblems(marks: readonly StampLine[], onsets: Onsets, pack: 'A' | 'B' | 'C'): string[] {
+export function marksProblems(marks: readonly MarkLine[], onsets: Onsets, pack: 'A' | 'B' | 'C'): string[] {
   const out: string[] = [];
   const cues = gateCues({ stamps: marks as unknown as Stamp[] }, gateSteps(pack));
   if (cues.length === 0) out.push('it holds no cue: neither a cue mark ({"what":"cue","on":true}) nor a cue_<i>_on step mark');
@@ -249,23 +262,42 @@ export function marksProblems(marks: readonly StampLine[], onsets: Onsets, pack:
   return out;
 }
 
-/** Reads one published set; a ReplayRefusal names the file and what is wrong with it. */
-export function readPublishedSet(dir: string): PublishedSet {
+/** What a gate set with a verdict holds: said when one of its files is missing. */
+const WITH_VERDICT = 'every published gate set with a verdict holds it (spec 8.7); fetch the whole folder again';
+
+/** The files a set without verdict.json may hold that replay reads, in the order pack writes them (analysis/pack.ts SET_ORDER). */
+const VERDICTLESS_READ = [SET_FILES.manifest, SET_FILES.stream, MARKS_FILE, RESETS_FILE, SET_FILES.onsets, SET_FILES.calib, SET_FILES.clockReport] as const;
+
+/**
+ * Reads one published gate set: a PublishedSet when it holds verdict.json, a VerdictlessSet when it
+ * does not. A ReplayRefusal names the file and what is wrong with it.
+ */
+export function readSetFolder(dir: string): PublishedSet | VerdictlessSet {
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
     throw new ReplayRefusal(`${dir} is not a folder: name a published set, data/<id>/, or its id`);
   }
   const realDir = fs.realpathSync(dir);
   const where = (file: string): string => path.join(dir, file);
   const optional = (file: string): string | null => readSetFile(dir, realDir, file);
-  const text = (file: string, missing = `every published gate set with a verdict holds it (spec 8.7); fetch the whole folder again`): string => {
+  const text = (file: string, missing = WITH_VERDICT): string => {
     const t = optional(file);
     if (t === null) throw new ReplayRefusal(`${where(file)} is missing: ${missing}`);
     return t;
   };
-  const json = <T>(file: string, validate: Validator<T>, missing?: string): T => {
-    const p = parseJson(text(file, missing), validate, { file });
+  const valid = <T>(file: string, t: string, validate: Validator<T>): T => {
+    const p = parseJson(t, validate, { file });
     if (p.value === null) throw new ReplayRefusal(`${where(file)} is not valid (core/schemas):\n  ${problemList(p.errors)}`);
     return p.value;
+  };
+  const json = <T>(file: string, validate: Validator<T>, missing?: string): T => valid(file, text(file, missing), validate);
+  const optionalJson = <T>(file: string, validate: Validator<T>): T | null => {
+    const t = optional(file);
+    return t === null ? null : valid(file, t, validate);
+  };
+  const streamOf = (t: string): ReturnType<typeof parseStream> => {
+    const rows = parseJsonl(t, validateStreamLine, { file: SET_FILES.stream });
+    if (rows.errors.length > 0) throw new ReplayRefusal(`${where(SET_FILES.stream)} is not valid (core/schemas):\n  ${problemList(rows.errors)}`);
+    return parseStream(t);
   };
 
   const manifest = json(SET_FILES.manifest, validatePublishedManifest, 'every published set holds it (spec 8.7); fetch the whole folder again');
@@ -284,11 +316,33 @@ export function readPublishedSet(dir: string): PublishedSet {
       `${where(SET_FILES.manifest)} says ${notMeasured}: no SDK measured this run, so it is a rehearsal and no recording of pack ${pack}; stage B scores no such run and pack publishes none (spec 6.5, PREREG section 11). Name the set of a recording`,
     );
   }
-  const verdict = json(
-    SET_FILES.verdict,
-    validateVerdict,
-    'pack writes a gate set without verdict.json and verdict.md when the recording has no verdict in its ledger, because it does not count (PREREG §7, §11) or its stage B has not run; pack A then also leaves out onsets.json while its objection block is held back (PREREG §7.5). There is no verdict to replay in this set: name a set whose verdict is published',
-  );
+  const name = `data/${manifest.id}/`;
+  const verdict = optionalJson(SET_FILES.verdict, validateVerdict);
+
+  if (verdict === null) {
+    // The set of a recording that never reached its verdict: each file it holds is checked.
+    if (optional(SET_FILES.verdictMd) !== null) {
+      throw new ReplayRefusal(`${where(SET_FILES.verdictMd)} is here, but verdict.json is not: pack copies the two together (spec 8.7); fetch the whole folder again`);
+    }
+    const streamText = optional(SET_FILES.stream);
+    const stream = streamText === null ? null : streamOf(streamText);
+    const marksText = optional(MARKS_FILE);
+    // Not checked against onsets.json: replay scores nothing with them here.
+    if (marksText !== null) marksOf(marksText, where(MARKS_FILE));
+    const resetsText = optional(RESETS_FILE);
+    if (resetsText !== null) {
+      if (stream === null) {
+        throw new ReplayRefusal(`${where(RESETS_FILE)} names packets of stream.jsonl, which the set does not hold: pack writes the two together; fetch the whole folder again`);
+      }
+      resetsOf(resetsText, where(RESETS_FILE), stream.inputs);
+    }
+    const onsets = optionalJson(SET_FILES.onsets, validateOnsets);
+    optionalJson(SET_FILES.calib, validateCalib);
+    const clockReport = optionalJson(SET_FILES.clockReport, validateClockReport);
+    const read = VERDICTLESS_READ.filter((f) => fs.existsSync(where(f)));
+    return { dir, name, id: manifest.id, pack, manifest, verdict: null, onsets, clockReport, read };
+  }
+
   if (verdict.id !== manifest.id || verdict.pack !== pack) {
     throw new ReplayRefusal(
       `${where(SET_FILES.verdict)} is the verdict of ${verdict.id} pack ${verdict.pack}, but manifest.json names ${manifest.id} pack ${pack}: the files come from different sets`,
@@ -296,10 +350,7 @@ export function readPublishedSet(dir: string): PublishedSet {
   }
   const verdictMd = text(SET_FILES.verdictMd, 'pack copies it with verdict.json, which is here (spec 8.7); fetch the whole folder again');
 
-  const streamText = text(SET_FILES.stream);
-  const rows = parseJsonl(streamText, validateStreamLine, { file: SET_FILES.stream });
-  if (rows.errors.length > 0) throw new ReplayRefusal(`${where(SET_FILES.stream)} is not valid (core/schemas):\n  ${problemList(rows.errors)}`);
-  const { inputs, nArrBySeq } = parseStream(streamText);
+  const { inputs, nArrBySeq } = streamOf(text(SET_FILES.stream));
   if (!inputs.some((r) => r.k === 'batch')) {
     throw new ReplayRefusal(
       `${where(SET_FILES.stream)} holds no packet (no "batch" line), yet verdict.json holds a verdict stage B scored on the camera data: the file is cut short or not the one pack wrote; fetch the whole folder again`,
@@ -307,30 +358,22 @@ export function readPublishedSet(dir: string): PublishedSet {
   }
   const onsets = json(SET_FILES.onsets, validateOnsets, 'pack copies it with verdict.json, which is here (spec 8.7); fetch the whole folder again');
 
-  let marks: StampLine[] | null = null;
+  let marks: MarkLine[] | null = null;
   const marksText = optional(MARKS_FILE);
   if (marksText !== null) {
-    const m = parseJsonl(marksText, validateStampLine, { file: MARKS_FILE });
-    if (m.errors.length > 0) throw new ReplayRefusal(`${where(MARKS_FILE)} is not valid (core/schemas stamps.jsonl lines):\n  ${problemList(m.errors)}`);
-    const other = m.rows.findIndex((r) => r.k !== 'mark');
-    if (other >= 0) {
-      throw new ReplayRefusal(
-        `${where(MARKS_FILE)} line ${m.lineNumbers[other]}: a "${m.rows[other]!.k}" stamp; the file holds only the "mark" lines of stamps.jsonl, so leave the other stamps out`,
-      );
-    }
-    const problems = marksProblems(m.rows, onsets, pack);
+    marks = marksOf(marksText, where(MARKS_FILE));
+    const problems = marksProblems(marks, onsets, pack);
     if (problems.length > 0) {
       throw new ReplayRefusal(
         `${where(MARKS_FILE)} does not fit onsets.json, so its marks are not the ones of this recording:\n  ${problemList(problems)}\n  Fetch the set again, or take ${MARKS_FILE} out of the folder to replay it without the marks`,
       );
     }
-    marks = m.rows;
   }
   const resetsText = optional(RESETS_FILE);
 
   return {
     dir,
-    name: `data/${manifest.id}/`,
+    name,
     id: manifest.id,
     pack,
     manifest,
@@ -344,4 +387,13 @@ export function readPublishedSet(dir: string): PublishedSet {
     marks,
     resets: resetsText === null ? null : resetsOf(resetsText, where(RESETS_FILE), inputs),
   };
+}
+
+/** Reads one published set with its verdict; a ReplayRefusal names the file and what is wrong with it. */
+export function readPublishedSet(dir: string): PublishedSet {
+  const set = readSetFolder(dir);
+  if (set.verdict === null) {
+    throw new ReplayRefusal(`${path.join(dir, SET_FILES.verdict)} is missing: the set holds no verdict to replay, as pack writes none for a recording that never reached its verdict (PREREG sections 7 and 11)`);
+  }
+  return set;
 }

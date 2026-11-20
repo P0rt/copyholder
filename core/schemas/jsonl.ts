@@ -12,7 +12,8 @@ export type JsonlFile =
   | 'stream.jsonl'
   | 'events.jsonl'
   | 'ledger.jsonl'
-  | 'sdk_raw.jsonl';
+  | 'sdk_raw.jsonl'
+  | 'marks.jsonl';
 
 /** JSON files whose spec example fixes a key order. */
 export type OrderedJsonFile =
@@ -47,6 +48,8 @@ export const KEY_ORDERS: Readonly<Record<OrderedFile, readonly string[]>> = {
   ],
   'ledger.jsonl': ['i', 'step', 'utc', 'commit', 'what', 'detail', 'out_sha256', 'exploratory', 'prev'],
   'sdk_raw.jsonl': ['seq', 'kind', 'tArrNs', 'tWallMs', 'tsCbUs', 'b64', 'args'],
+  // The "mark" lines of stamps.jsonl, in the order Deck writes them.
+  'marks.jsonl': ['n', 'k', 'i', 'what', 'name', 'on'],
   'manifest.json': [
     'schema', 'id', 'kind', 'started_utc', 'app_commit', 'tree_clean', 'plan_commitment',
     'sdk', 'version', 'metrics', 'launcher', 'machine', 'camera', 'name', 'requested',

@@ -10,6 +10,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { DetectorInput } from '../../core/detector.ts';
 import {
+  G_RESETS_SCHEMA,
   buildStreamJsonl,
   parseJson,
   toJsonText,
@@ -31,7 +32,7 @@ import { gResetSeqs, type SampleLmLike } from '../rivals/index.ts';
 import { main, parseReplayArgs, type ReplayDeps } from '../replay.ts';
 import { findParams, tunedByStageA, tunedStepOf } from './params.ts';
 import { replaySet, sniffEdgeOf, VERDICT_FIELDS, type Check, type ScoredSet, type SetReplay } from './recompute.ts';
-import { MARKS_FILE, RESETS_FILE, RESETS_SCHEMA, readPublishedSet, setFolderOf, unreadFolderWhy } from './set.ts';
+import { MARKS_FILE, RESETS_FILE, readPublishedSet, setFolderOf, unreadFolderWhy } from './set.ts';
 import { replayTable, tableProblems, type ReplayTable } from './table.ts';
 
 const PREREG = preregParamsText();
@@ -131,7 +132,9 @@ function jsonl<T>(text: string): T[] {
  * and stamps.jsonl, audio_env.json (levels only; replay does not read it) and the copied files;
  * audio.wav, samples.jsonl, stamps.jsonl, detector_in.jsonl, ledger.jsonl and quickcheck.json
  * stay out. With `marks`, the "mark" lines of stamps.jsonl go into marks.jsonl as they are; with
- * `resets`, the reset frames stage B found go into g_resets.json.
+ * `resets`, the reset frames stage B found go into g_resets.json. Pack writes both into every gate
+ * set (analysis/pack.ts; pack-replay.test.ts runs pack itself); without them the set is one an
+ * earlier pack wrote.
  */
 function publish(session: string, out: string, o: { marks: boolean; resets?: boolean }): string {
   fs.mkdirSync(out, { recursive: true });
@@ -149,7 +152,7 @@ function publish(session: string, out: string, o: { marks: boolean; resets?: boo
   }
   if (o.resets) {
     const seqs = [...gResetSeqs(jsonl<DetectorInput>(read('detector_in.jsonl')), jsonl<SampleLmLike>(read('samples.jsonl'))).seqs].sort((a, b) => a - b);
-    fs.writeFileSync(path.join(out, RESETS_FILE), `${JSON.stringify({ schema: RESETS_SCHEMA, seqs })}\n`);
+    fs.writeFileSync(path.join(out, RESETS_FILE), `${JSON.stringify({ schema: G_RESETS_SCHEMA, seqs })}\n`);
   }
   return out;
 }
@@ -225,9 +228,9 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     setB = publish(b, path.join(root, 'two', 'data', 'gate-b'), { marks: true });
   }, 180_000);
 
-  it('builds sets that pass the published-set checks of core/schemas, but for marks.jsonl, which main does not list', () => {
+  it('builds sets that pass the published-set checks of core/schemas, marks.jsonl included', () => {
     expect(validatePublishedFolder(folderFiles(bareA))).toEqual([]);
-    expect(validatePublishedFolder(folderFiles(setA))).toEqual([`${MARKS_FILE}: not part of data/<id>/ (spec 8.7)`]);
+    expect(validatePublishedFolder(folderFiles(setA))).toEqual([]);
     const tunedB = JSON.parse(fs.readFileSync(r.paramsFile, 'utf8')) as { d1: { k: number }; g: { theta_G: number } };
     expect([tunedB.d1.k, tunedB.g.theta_G]).toEqual([2.5, 0.02]);
     expect(fs.readFileSync(r.paramsFile, 'utf8')).not.toBe(frozenAfterA);
@@ -261,7 +264,7 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     }
   });
 
-  it('exits 3, not 0, on a set as pack writes it on main: the verdict needs the marks, so it is not verified, also when verdict.json was changed', async () => {
+  it('exits 3, not 0, on a set without marks.jsonl, as pack wrote one before it published the marks: the verdict needs them, so it is not verified, also when verdict.json was changed', async () => {
     const run = replayDeps(r);
     expect(await main([bareA], run.deps)).toBe(3);
     const out = run.out;
@@ -299,7 +302,7 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     const json = path.join(root, 'two', 'bare.json');
     const refused = replayDeps(r);
     expect(await main([bareA, '--json', json, '--svg', `${json}.svg`], refused.deps)).toBe(1);
-    expect(refused.err.join('\n')).toMatch(/^replay wrote no --json, --svg: they need the cues of every set, and data\/gate-a\/ has no marks\.jsonl/);
+    expect(refused.err.join('\n')).toMatch(/^replay wrote no --json, --svg: they need the verdict and the cues of every set, and data\/gate-a\/ has no marks\.jsonl with the cue and step marks \(see the notes above\)$/);
     expect(fs.existsSync(json) || fs.existsSync(`${json}.svg`)).toBe(false);
   });
 
@@ -523,7 +526,7 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     ]);
   });
 
-  it('refuses a set without verdict.json or with a broken file, names the file, and goes on with the other sets', async () => {
+  it('refuses a set with verdict.md but without verdict.json, or with a broken file, names the file, and goes on with the other sets', async () => {
     const dir = path.join(root, 'two', 'broken', 'gate-a');
     fs.cpSync(setA, dir, { recursive: true });
     fs.rmSync(path.join(dir, 'verdict.json'));
@@ -533,10 +536,10 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     const run = replayDeps(r);
     expect(await main([dir, path.join(root, 'two', 'nothing-here'), marks, setB], run.deps)).toBe(1);
     expect(run.err[0]).toBe(
-      `replay refused ${dir}: ${path.join(dir, 'verdict.json')} is missing: pack writes a gate set without verdict.json and verdict.md when the recording has no verdict in its ledger, because it does not count (PREREG §7, §11) or its stage B has not run; pack A then also leaves out onsets.json while its objection block is held back (PREREG §7.5). There is no verdict to replay in this set: name a set whose verdict is published`,
+      `replay refused ${dir}: ${path.join(dir, 'verdict.md')} is here, but verdict.json is not: pack copies the two together (spec 8.7); fetch the whole folder again`,
     );
     expect(run.err[1]).toMatch(/^replay refused .*nothing-here: .*nothing-here is not a folder: name a published set, data\/<id>\/, or its id$/);
-    expect(run.err[2]).toMatch(/marks\.jsonl line \d+: a "arr" stamp; the file holds only the "mark" lines of stamps\.jsonl, so leave the other stamps out$/);
+    expect(run.err[2]).toMatch(/marks\.jsonl is not valid \(core\/schemas\):\n {2}marks\.jsonl line \d+: k: expected "mark", got "arr": marks\.jsonl holds only the "mark" lines of stamps\.jsonl$/);
     expect(run.out).toContain(`replay data/gate-b/ (pack A, from ${setB})`);
     expect(last(run.out)).toBe('replay: 3 of 4 sets refused (see above)');
 
@@ -546,6 +549,60 @@ describe('npm run replay on the published sets of two recordings (spec 8.7, 9.6,
     const run2 = replayDeps(r);
     expect(await main([noOnsets], run2.deps)).toBe(1);
     expect(run2.err[0]).toBe(`replay refused ${noOnsets}: ${path.join(noOnsets, 'onsets.json')} is missing: pack copies it with verdict.json, which is here (spec 8.7); fetch the whole folder again`);
+  });
+
+  it('checks a set without verdict.json, as pack writes one for a recording that never reached its verdict: nothing differs, and there is no verdict to verify; exit 3', async () => {
+    const dir = copySet(setA, path.join(root, 'two', 'no-verdict', 'gate-a'));
+    for (const f of ['verdict.json', 'verdict.md']) fs.rmSync(path.join(dir, f));
+    const run = replayDeps(r);
+    expect(await main([dir], run.deps)).toBe(3);
+    expect(run.err).toEqual([]);
+    const out = run.out;
+    expect(out).toContain(`replay data/gate-a/ (pack A, from ${dir})`);
+    expect(out.some((l) => l.startsWith('  params: '))).toBe(false);
+    expect(out).toContain(
+      '  note: replay read manifest.json, stream.jsonl, marks.jsonl, onsets.json, calib.json and clock_report.json of this set and found each valid (core/schemas); with no verdict it scores nothing',
+    );
+    expect(lineOf(out, 'verdict')).toMatch(
+      / +- +- +not recomputable from the set: the set has no verdict\.json, so it holds no verdict to recompute: pack writes none for a recording that never reached its verdict, because it does not count or stage B has not run on it \(PREREG sections 7 and 11\)$/,
+    );
+    expect(lineOf(out, 'onsets.json labels_sha256')).toMatch(/ MATCH$/);
+    expect(lineOf(out, 'clock_report.json onset.p90_abs_auto_minus_manual_ms')).toMatch(/ MATCH$/);
+    expect(out.some((l) => / DIFFERS$/.test(l))).toBe(false);
+    expect(last(out)).toBe(
+      'replay: no recomputed value differs, but the verdict is not verified: data/gate-a/ verdict is not recomputable from the set or match only under a condition it does not show (see above; 2 MATCH, 0 DIFFERS, 1 not recomputable from the set, 0 inputs)',
+    );
+
+    // Without onsets.json, as pack A writes the set while part B is held back (PREREG section 7.5),
+    // beside a set with its verdict: that one is verified, the run is not.
+    fs.rmSync(path.join(dir, 'onsets.json'));
+    const cut = replayDeps(r);
+    expect(await main([setA, dir], cut.deps)).toBe(3);
+    expect(cut.out).toContain(
+      '  note: a set of pack A without a verdict and without onsets.json may end at the step mark of the objection block: pack holds part B back until the stage A hash is in the ledger, and this recording never got one (PREREG section 7.5)',
+    );
+    expect(cut.out.filter((l) => l.startsWith('  onsets.json ') || l.startsWith('  clock_report.json '))).toHaveLength(2);
+    expect(last(cut.out)).toMatch(/^replay: no recomputed value differs, but the verdict is not verified: data\/gate-a\/ verdict is not recomputable/);
+
+    // The table and the figure need a verdict: nothing is written, exit 1.
+    const json = path.join(root, 'two', 'no-verdict.json');
+    const refused = replayDeps(r);
+    expect(await main([dir, '--json', json], refused.deps)).toBe(1);
+    expect(refused.err).toEqual(['replay wrote no --json: it needs the verdict and the cues of every set, and data/gate-a/ has no verdict.json (see the notes above)']);
+    expect(fs.existsSync(json)).toBe(false);
+
+    // Its files are checked all the same: a g_resets.json that names a packet with a g value, or one without stream.jsonl.
+    const withG = jsonl<{ k: string; seq: number; g?: number | null }>(fs.readFileSync(path.join(dir, 'stream.jsonl'), 'utf8')).find((l) => l.k === 'batch' && typeof l.g === 'number')!;
+    fs.writeFileSync(path.join(dir, RESETS_FILE), `${JSON.stringify({ schema: G_RESETS_SCHEMA, seqs: [withG.seq] })}\n`);
+    const bad = replayDeps(r);
+    expect(await main([dir], bad.deps)).toBe(1);
+    expect(bad.err[0]).toMatch(new RegExp(`g_resets\\.json lists seq ${withG.seq}, which is no packet of stream\\.jsonl with g null`));
+    fs.rmSync(path.join(dir, 'stream.jsonl'));
+    const noStream = replayDeps(r);
+    expect(await main([dir], noStream.deps)).toBe(1);
+    expect(noStream.err[0]).toBe(
+      `replay refused ${dir}: ${path.join(dir, RESETS_FILE)} names packets of stream.jsonl, which the set does not hold: pack writes the two together; fetch the whole folder again`,
+    );
   });
 
   it('refuses marks.jsonl that does not fit onsets.json: marks of another recording', async () => {
@@ -706,7 +763,7 @@ describe('a set whose stream.jsonl has packets with g null (spec 7.5, 8.1)', () 
 
   it('with g_resets.json the reset frames are known: every value of G is recomputed and verified, and the figure keeps every lips stop', async () => {
     const dir = publish(session14, path.join(root, 'noframe-14', 'resets', 'gate-a'), { marks: true, resets: true });
-    expect(JSON.parse(fs.readFileSync(path.join(dir, RESETS_FILE), 'utf8'))).toEqual({ schema: RESETS_SCHEMA, seqs: [] });
+    expect(JSON.parse(fs.readFileSync(path.join(dir, RESETS_FILE), 'utf8'))).toEqual({ schema: G_RESETS_SCHEMA, seqs: [] });
     const svg = path.join(root, 'noframe-14', 'resets.svg');
     const run = replayDeps(r14);
     expect(await main([dir, '--svg', svg], run.deps)).toBe(0);
@@ -717,7 +774,7 @@ describe('a set whose stream.jsonl has packets with g null (spec 7.5, 8.1)', () 
 
     // A packet g_resets.json names must carry g null in stream.jsonl.
     const withG = jsonl<{ k: string; seq: number; g?: number | null }>(fs.readFileSync(path.join(dir, 'stream.jsonl'), 'utf8')).find((l) => l.k === 'batch' && typeof l.g === 'number')!;
-    fs.writeFileSync(path.join(dir, RESETS_FILE), `${JSON.stringify({ schema: RESETS_SCHEMA, seqs: [withG.seq] })}\n`);
+    fs.writeFileSync(path.join(dir, RESETS_FILE), `${JSON.stringify({ schema: G_RESETS_SCHEMA, seqs: [withG.seq] })}\n`);
     const run2 = replayDeps(r14);
     expect(await main([dir], run2.deps)).toBe(1);
     expect(run2.err[0]).toMatch(new RegExp(`g_resets\\.json lists seq ${withG.seq}, which is no packet of stream\\.jsonl with g null: live/reduce\\.cjs writes g null on every reset frame`));

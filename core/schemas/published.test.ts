@@ -4,16 +4,18 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
-  GATE_ONLY_FILES, LANDMARK_COUNT, NEVER_IN_GIT, NEVER_IN_GIT_PREFIXES, PUBLISHED_KINDS, RECORD_KINDS, STREAM_FIELDS,
+  GATE_ONLY_FILES, LANDMARK_COUNT, NEVER_IN_GIT, NEVER_IN_GIT_PREFIXES, NEVER_PUBLISHED, PUBLISHED_FILES, PUBLISHED_KINDS,
+  RECORD_KINDS, STREAM_FIELDS,
   buildStreamJsonl, checkPublishedNames, detectorInToStream, findFaceLandmarkFields, findLocalPaths, listDeviceNames,
   parseJsonl, sampleToDetectorIn, streamToDetectorIn, toJsonlText, toPublishedManifest, validateAudioEnv,
-  validateDetectorInLine, validatePlantedTimes, validatePublishedFolder, validatePublishedManifest, validateSampleLine,
-  validateSentenceEnds, validateStreamLine, whyNoPublishedSet, whyNotInGit,
+  validateDetectorInLine, validateGResets, validateMarkLine, validatePlantedTimes, validatePublishedFolder,
+  validatePublishedManifest, validateSampleLine, validateSentenceEnds, validateStampLine, validateStreamLine, whyNoPublishedSet,
+  whyNotInGit,
   type DetectorInLine, type Manifest, type SamplePacket, type StampLine, type StreamLine,
 } from './index.ts';
 import {
-  EXAMPLE_SEAL, exampleAudioEnv, exampleDetectorIn, exampleEvents, exampleManifest, examplePlantedTimes,
-  exampleSamples, exampleSentenceEnds, exampleStamps, exampleStream,
+  EXAMPLE_SEAL, exampleAudioEnv, exampleDetectorIn, exampleEvents, exampleGResets, exampleManifest, exampleMarks,
+  examplePlantedTimes, exampleSamples, exampleSentenceEnds, exampleStamps, exampleStream,
 } from './examples.ts';
 
 const LANDMARK_REASON = 'not allowed: face landmark coordinates stay in samples.jsonl (spec 8.1, 8.7, 12.3)';
@@ -228,6 +230,62 @@ describe('audio_env.json, sentence_ends.json, planted_times.json (spec 8.7)', ()
   });
 });
 
+describe('marks.jsonl and g_resets.json of a gate set (for npm run replay)', () => {
+  it('marks.jsonl: the "mark" lines of stamps.jsonl, exactly as Deck writes them, which stamps.jsonl accepts too', () => {
+    for (const line of exampleMarks()) {
+      expect(validateMarkLine(line)).toEqual([]);
+      expect(validateStampLine(line)).toEqual([]);
+    }
+    const marks = exampleStamps().filter((l) => l.k === 'mark');
+    expect(marks).toHaveLength(1);
+    expect(validateMarkLine(marks[0])).toEqual([]);
+  });
+
+  it('marks.jsonl: a field Deck does not write on a mark is refused, so no text can ride along', () => {
+    expect(validateMarkLine({ n: 12240000, k: 'mark', what: 'step', name: 'objections', text: 'Breathe in' })).toEqual(['text: unexpected field']);
+    expect(validateMarkLine({ n: 12960000, k: 'mark', i: 1, what: 'cue', on: true, name: 'cue_1_on' })).toEqual(['name: unexpected field']);
+    expect(validateMarkLine({ n: 13100000, k: 'mark', what: 'key', i: 2 })).toEqual(['i: unexpected field']);
+    expect(validateMarkLine({ n: 12960000, k: 'mark', i: 1, what: 'cue' })).toEqual(['on: missing']);
+    expect(validateMarkLine({ n: 12240000, k: 'mark', what: 'step' })).toEqual(['name: missing']);
+  });
+
+  it('marks.jsonl: a step name is a name of the scenario, never words: lowercase letters, digits and _', () => {
+    const step = (name: unknown): unknown => ({ n: 12240000, k: 'mark', what: 'step', name });
+    for (const name of ['objections', 'cue_14_off', 'pa_end_1_closed', 'rest_2', 'deep_3_in']) expect(validateMarkLine(step(name)), name).toEqual([]);
+    expect(validateMarkLine(step('Breathe in'))).toEqual(['name: expected a step name of the scenario (lowercase letters, digits and _), got "Breathe in"']);
+    expect(validateMarkLine(step('breathe in'))).toEqual(['name: expected a step name of the scenario (lowercase letters, digits and _), got "breathe in"']);
+    for (const name of ['Objections', '1st', '_rest', 'cue-1', 'rest.2', '']) expect(validateMarkLine(step(name)), name).toHaveLength(1);
+    expect(validateMarkLine(step(7))).toEqual(['name: expected a step name of the scenario (lowercase letters, digits and _), got 7']);
+  });
+
+  it('marks.jsonl: a stamp of another kind or a mark of another sort is refused with the reason', () => {
+    expect(validateMarkLine({ n: 8640000, k: 'arr', seq: 5417 })).toEqual([
+      'k: expected "mark", got "arr": marks.jsonl holds only the "mark" lines of stamps.jsonl',
+    ]);
+    expect(validateMarkLine({ n: 1, k: 'mark', what: 'note' })).toEqual(['what: unknown mark "note" (expected one of step, cue, key)']);
+    expect(validateMarkLine({ n: -1, k: 'mark', what: 'key' })).toEqual(['n: expected a sample number (non-negative integer) >= 0, got -1']);
+    expect(validateMarkLine('{"n":1}')).toEqual(['expected an object, got "{\\"n\\":1}"']);
+  });
+
+  it('g_resets.json: packet numbers in ascending order, each once, under its schema', () => {
+    expect(validateGResets(exampleGResets())).toEqual([]);
+    expect(validateGResets({ schema: 'g-resets/1', seqs: [] })).toEqual([]);
+    expect(validateGResets({ schema: 'g-resets/1', seqs: [5417, 5502, 5490] })).toEqual([
+      'seqs[2]: expected a packet number above 5502: the seqs rise, each listed once, got 5490',
+    ]);
+    expect(validateGResets({ schema: 'g-resets/1', seqs: [5417, 5417] })).toEqual([
+      'seqs[1]: expected a packet number above 5417: the seqs rise, each listed once, got 5417',
+    ]);
+    expect(validateGResets({ schema: 'g-resets/1', seqs: [3, -1, 2.5] })).toEqual([
+      'seqs[1]: expected an SDK callback number (non-negative integer) >= 0, got -1',
+      'seqs[2]: expected an SDK callback number (non-negative integer), got 2.5',
+    ]);
+    expect(validateGResets({ schema: 'g-resets/2', seqs: [1] })).toEqual(['schema: expected "g-resets/1", got "g-resets/2"']);
+    expect(validateGResets({ schema: 'g-resets/1', seqs: [1], flagged: 1 })).toEqual(['flagged: unexpected field']);
+    expect(validateGResets({ schema: 'g-resets/1' })).toEqual(['seqs: missing']);
+  });
+});
+
 /** A manifest as host writes it on the Mac, with names that can carry a person's name. */
 function hostManifest(): Manifest {
   const m = exampleManifest();
@@ -307,13 +365,20 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
     expect(checkPublishedNames(['audio.wav', 'clips/o07.wav', 'texts.json'], { audio: true, clips: true, texts: true })).toEqual([]);
   });
 
-  it('verdict.md and verdict.json belong to the set of the day-1 gate only (spec 8.7)', () => {
-    expect(GATE_ONLY_FILES).toEqual(['verdict.md', 'verdict.json']);
-    expect(checkPublishedNames(['manifest.json', 'verdict.md', 'verdict.json'], { kind: 'gate', pack: 'A' })).toEqual([]);
+  it('verdict.md, verdict.json, marks.jsonl and g_resets.json belong to the set of the day-1 gate only (spec 8.7)', () => {
+    expect(GATE_ONLY_FILES).toEqual(['verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json']);
+    for (const name of GATE_ONLY_FILES) expect(PUBLISHED_FILES, name).toContain(name);
+    expect(checkPublishedNames(['manifest.json', 'verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json'], { kind: 'gate', pack: 'A' })).toEqual([]);
     expect(checkPublishedNames(['manifest.json', 'receipt.json', 'verdict.md', 'verdict.json'], { kind: 'numbers' })).toEqual([
       'verdict.md: only the set of the day-1 gate has it, this record is "numbers" (spec 8.7)',
       'verdict.json: only the set of the day-1 gate has it, this record is "numbers" (spec 8.7)',
     ]);
+    // The marks and the reset frames are published; the files they come from never are.
+    expect(checkPublishedNames(['marks.jsonl', 'g_resets.json', 'stamps.jsonl', 'samples.jsonl'], { kind: 'gate', pack: 'B' })).toEqual([
+      'stamps.jsonl: never published (spec 8.7)',
+      'samples.jsonl: never published (spec 8.7)',
+    ]);
+    expect(NEVER_PUBLISHED).toEqual(expect.arrayContaining(['stamps.jsonl', 'samples.jsonl']));
   });
 
   it('a set for the gate, each numbers session, the space-bar block, each demo take and each headstart take; none for development records (spec 8.7)', () => {
@@ -331,8 +396,10 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
   it('a headstart take (a demo take of PREREG section 11) gets a set; live_from and live_sim runs get none', () => {
     expect(whyNoPublishedSet('headstart')).toBeNull();
     expect(checkPublishedNames(['manifest.json', 'stream.jsonl', 'events.jsonl', 'audio_env.json'], { kind: 'headstart' })).toEqual([]);
-    expect(checkPublishedNames(['manifest.json', 'verdict.md'], { kind: 'headstart' })).toEqual([
+    expect(checkPublishedNames(['manifest.json', 'verdict.md', 'marks.jsonl', 'g_resets.json'], { kind: 'headstart' })).toEqual([
       'verdict.md: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
+      'marks.jsonl: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
+      'g_resets.json: only the set of the day-1 gate has it, this record is "headstart" (spec 8.7)',
     ]);
     for (const kind of ['live_from', 'live_sim'] as const) {
       expect(whyNoPublishedSet(kind)).toBe(
@@ -377,6 +444,27 @@ describe('what may be published or committed (spec 8.7, 12.4, 13.4 "Чистот
       'audio.wav: published only with --with-audio (spec 8.7)',
       'samples.jsonl: never published (spec 8.7)',
       `stream.jsonl line 5: p: ${LANDMARK_REASON}`,
+    ]);
+  });
+
+  it('validatePublishedFolder checks marks.jsonl and g_resets.json of a gate set line by line', () => {
+    const gate: Manifest = { ...exampleManifest(), kind: 'gate', pack: 'A', plan_commitment: null };
+    const ok = {
+      'manifest.json': JSON.stringify(gate),
+      'marks.jsonl': toJsonlText(exampleMarks(), 'marks.jsonl'),
+      'g_resets.json': `${JSON.stringify(exampleGResets())}\n`,
+    };
+    expect(validatePublishedFolder(ok)).toEqual([]);
+    expect(
+      validatePublishedFolder({
+        ...ok,
+        'marks.jsonl': `${ok['marks.jsonl']}{"n":13200000,"k":"mark","what":"step","name":"Breathe out"}\n{"n":13300000,"k":"mark","what":"key","word":57}\n`,
+        'g_resets.json': '{"schema":"g-resets/1","seqs":[5502,5417]}\n',
+      }),
+    ).toEqual([
+      'marks.jsonl line 7: name: expected a step name of the scenario (lowercase letters, digits and _), got "Breathe out"',
+      'marks.jsonl line 8: word: unexpected field',
+      'g_resets.json: seqs[1]: expected a packet number above 5502: the seqs rise, each listed once, got 5417',
     ]);
   });
 

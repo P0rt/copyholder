@@ -8,7 +8,7 @@ import type { FrozenParams, ScoringRules } from './params.ts';
 import type { FreezeManifest, PlanError, SealedPlan, Texts, Timings } from './plan.ts';
 import type { Receipt } from './receipt.ts';
 import type { Results } from './results.ts';
-import type { AudioEnv, PlantedTimes, SentenceEnds, StreamLine } from './published.ts';
+import type { AudioEnv, GResetsFile, MarkLine, PlantedTimes, SentenceEnds, StreamLine } from './published.ts';
 import type { LedgerLine } from './ledger.ts';
 
 /** The seal of the spec 8.3 screen example. */
@@ -513,6 +513,23 @@ export function examplePlantedTimes(): PlantedTimes {
       { error_id: 's1-e2', n_start: null, n_end: null, interrupted: false },
     ],
   };
+}
+
+/** marks.jsonl of a gate set: the "mark" lines of stamps.jsonl, a step, a cue dot filled and emptied, a key press. */
+export function exampleMarks(): MarkLine[] {
+  return [
+    { n: 12240000, k: 'mark', what: 'step', name: 'objections' },
+    { n: 12960000, k: 'mark', what: 'step', name: 'cue_1_on' },
+    { n: 12960000, k: 'mark', i: 1, what: 'cue', on: true },
+    { n: 13032000, k: 'mark', what: 'step', name: 'cue_1_off' },
+    { n: 13032000, k: 'mark', i: 1, what: 'cue', on: false },
+    { n: 13100000, k: 'mark', what: 'key' },
+  ];
+}
+
+/** g_resets.json of a gate set: the packets stage B read as reset frames of G. */
+export function exampleGResets(): GResetsFile {
+  return { schema: 'g-resets/1', seqs: [5417, 5502] };
 }
 
 /** timings.json of a short clip, as tools/tts writes it (spec 7.7, 8.2). */

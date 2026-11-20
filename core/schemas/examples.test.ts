@@ -29,6 +29,7 @@ const JSON_EXAMPLES: Readonly<Record<string, () => object>> = {
   'audio_env.json': ex.exampleAudioEnv,
   'sentence_ends.json': ex.exampleSentenceEnds,
   'planted_times.json': ex.examplePlantedTimes,
+  'g_resets.json': ex.exampleGResets,
 };
 
 /** File name -> example lines. */
@@ -39,6 +40,7 @@ const JSONL_EXAMPLES: Readonly<Record<JsonlFile, () => object[]>> = {
   'stream.jsonl': ex.exampleStream,
   'events.jsonl': ex.exampleEvents,
   'ledger.jsonl': () => [ex.exampleLedgerLine()],
+  'marks.jsonl': ex.exampleMarks,
   'sdk_raw.jsonl': () => [
     { seq: 5417, kind: 'metrics', tArrNs: '812345678901234', tWallMs: 1794935111190, tsCbUs: 1794935111156789, b64: 'AAEC' },
     { seq: 5418, kind: 'error', tArrNs: '812345712345678', tWallMs: 1794935111224, args: [8, 'kCameraError'] },

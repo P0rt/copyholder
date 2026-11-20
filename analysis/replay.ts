@@ -2,15 +2,18 @@
 //                   [--svg <out.svg>] [--png <out.png>] [--chrome <path>]
 // Recomputes the numbers of published gate sets data/<id>/ with stage B's own functions and
 // compares each with the set's verdict.json (spec 8.7, 9.6, 9.7): no camera, no API key, no
-// session folder. A bare id is <id>/ in the data folder (COPYHOLDER_DATA_DIR, else data/ under
-// the repository root). --params names the params file stage B scored with when
-// params/retune.json and params/frozen.json are not it; --json writes one row per cue, --svg and
-// --png the figure of every valid objection (--chrome or PW_CHROMIUM_PATH names the Chrome that
-// draws the PNG). Nothing is read or written inside gate/ or sample/. See analysis/replay/README.md.
+// session folder. A gate set without verdict.json, the set of a recording that never reached its
+// verdict, has its files checked and no verdict to recompute. A bare id is <id>/ in the data
+// folder (COPYHOLDER_DATA_DIR, else data/ under the repository root). --params names the params
+// file stage B scored with when params/retune.json and params/frozen.json are not it; --json
+// writes one row per cue, --svg and --png the figure of every valid objection (--chrome or
+// PW_CHROMIUM_PATH names the Chrome that draws the PNG). Nothing is read or written inside gate/
+// or sample/. See analysis/replay/README.md.
 // Exit codes: 0 verified: the verdict and the five row outcomes of every set are recomputed and
 // match without a condition, and no recomputed value differs; 1 a value differs, or a set or an
 // output is refused; 2 usage; 3 nothing differs, but the verdict or a row outcome of a set is not
-// recomputable from it, or matches only under a condition the set does not show.
+// recomputable from it (a set without verdict.json has none), or matches only under a condition
+// the set does not show.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,8 +22,19 @@ import { gitTagFile } from './gate/deps.ts';
 import { isMainModule } from './lib/cli.ts';
 import { FigureError, figureData, figurePng, figureSvg } from './replay/figure.ts';
 import { findParams } from './replay/params.ts';
-import { KEY_VALUES, checkLines, countStatus, countText, replaySet, verifies, type ScoredSet, type SetReplay } from './replay/recompute.ts';
-import { MARKS_FILE, ReplayRefusal, readPublishedSet, realPathOf, setFolderOf, unreadFolderWhy, unreadPathWhy } from './replay/set.ts';
+import {
+  KEY_VALUES,
+  checkLines,
+  countStatus,
+  countText,
+  replaySet,
+  replayVerdictless,
+  verifies,
+  type ScoredSet,
+  type SetReplay,
+  type VerdictlessReplay,
+} from './replay/recompute.ts';
+import { MARKS_FILE, ReplayRefusal, readSetFolder, realPathOf, setFolderOf, unreadFolderWhy, unreadPathWhy } from './replay/set.ts';
 import { replayTable, tableProblems } from './replay/table.ts';
 
 export const USAGE =
@@ -94,9 +108,12 @@ function write(file: string, data: string | Uint8Array): string {
   return abs;
 }
 
-function printSet(r: SetReplay, deps: ReplayDeps): void {
+/** The replay of one set: with its verdict, or of a set without verdict.json. */
+type AnyReplay = SetReplay | VerdictlessReplay;
+
+function printSet(r: AnyReplay, deps: ReplayDeps): void {
   deps.log(`replay ${r.set.name} (pack ${r.set.pack}, from ${r.set.dir})`);
-  deps.log(`  params: ${r.params.source}; sha256 ${r.params.sha256.slice(0, 8)}, as verdict.json holds it`);
+  if (r.params !== null) deps.log(`  params: ${r.params.source}; sha256 ${r.params.sha256.slice(0, 8)}, as verdict.json holds it`);
   for (const note of r.notes) deps.log(`  note: ${note}`);
   for (const line of checkLines(r.checks)) deps.log(line);
   deps.log(`  ${r.set.id}: ${countText(countStatus(r.checks))}`);
@@ -104,19 +121,18 @@ function printSet(r: SetReplay, deps: ReplayDeps): void {
 }
 
 /** The key values of a set (KEY_VALUES) that are not verified, by their short names. */
-function unverifiedOf(r: SetReplay): string[] {
+function unverifiedOf(r: AnyReplay): string[] {
   return r.checks.filter((c) => KEY_VALUES.includes(c.name) && !verifies(c)).map((c) => (c.name === 'verdict' ? 'verdict' : c.name.replace(/^rows\.(\w+)\.outcome$/, 'row $1')));
 }
 
 /** The outputs that need every set scored: refused with what is missing, or written. */
-async function writeOutputs(args: ReplayArgs, replays: readonly SetReplay[], deps: ReplayDeps): Promise<boolean> {
+async function writeOutputs(args: ReplayArgs, replays: readonly AnyReplay[], deps: ReplayDeps): Promise<boolean> {
   const wanted = [args.json && '--json', args.svg && '--svg', args.png && '--png'].filter((x): x is string => typeof x === 'string');
   if (wanted.length === 0) return true;
   const unscored = replays.filter((r) => r.scored === null);
   if (unscored.length > 0) {
-    deps.error(
-      `replay wrote no ${wanted.join(', ')}: ${wanted.length === 1 ? 'it needs' : 'they need'} the cues of every set, and ${unscored.map((r) => r.set.name).join(', ')} ${unscored.length === 1 ? 'has' : 'have'} no ${MARKS_FILE} with the cue and step marks (see the notes above)`,
-    );
+    const why = (r: AnyReplay): string => `${r.set.name} has no ${r.params === null ? 'verdict.json' : `${MARKS_FILE} with the cue and step marks`}`;
+    deps.error(`replay wrote no ${wanted.join(', ')}: ${wanted.length === 1 ? 'it needs' : 'they need'} the verdict and the cues of every set, and ${unscored.map(why).join(', ')} (see the notes above)`);
     return false;
   }
   const scored = replays as (SetReplay & { scored: ScoredSet })[];
@@ -174,13 +190,12 @@ export async function main(argv: readonly string[], deps: ReplayDeps = defaultRe
     return 2;
   }
 
-  const replays: SetReplay[] = [];
+  const replays: AnyReplay[] = [];
   let refused = 0;
   folders.forEach((dir, i) => {
     try {
-      const set = readPublishedSet(dir);
-      const params = findParams(set.verdict, { env: deps.env, tagFile: deps.tagFile, paramsFile: args.paramsFile });
-      const r = replaySet(set, params);
+      const set = readSetFolder(dir);
+      const r = set.verdict === null ? replayVerdictless(set) : replaySet(set, findParams(set.verdict, { env: deps.env, tagFile: deps.tagFile, paramsFile: args.paramsFile }));
       replays.push(r);
       printSet(r, deps);
     } catch (e) {

@@ -3,7 +3,7 @@
 `npm run replay` reads a published day-1 gate set, `data/<id>/` (spec 8.7), recomputes the
 numbers of its verdict with stage B's own functions (`analysis/gate/score.ts` `scoreGate` and what
 it calls) and compares each one with the set's `verdict.json`. It needs no camera, no API key and
-no session folder.
+no session folder: everything it reads is in the set as `npm run pack` writes it.
 
 ```sh
 npm run replay -- gate-a                                  # data/gate-a/ (COPYHOLDER_DATA_DIR, else data/ under the repository root)
@@ -21,17 +21,19 @@ Exit codes:
 | 0 | verified: the verdict and the five row outcomes of every set are recomputed and match without a condition, and no recomputed value differs |
 | 1 | a recomputed value differs from the set, or a set or an output is refused |
 | 2 | usage: an unknown option, an option without its value, the same set named twice, or a path inside `gate/` or `sample/` |
-| 3 | no recomputed value differs, but the verdict or a row outcome of a set is not recomputable from it, or matches only under a condition the set does not show |
+| 3 | no recomputed value differs, but the verdict or a row outcome of a set is not recomputable from it (a set without `verdict.json` has none), or matches only under a condition the set does not show |
 
-A set exactly as pack writes it on main ends with exit 3: its verdict needs the cue and step marks,
-which no published file holds (see `marks.jsonl` below). Exit 0 needs a set with `marks.jsonl`.
+Pack writes `marks.jsonl` and `g_resets.json` into every gate set (see below), so a set as pack
+writes it is verified (exit 0) when stage B's verdict follows from it. A set without `marks.jsonl`,
+as an earlier pack wrote it, ends with exit 3: its verdict needs the cue and step marks. So does
+the set of a recording that never reached its verdict: it has no `verdict.json` to recompute.
 
 ## What it reads
 
-Seven files of the set, each checked with its validator from `core/schemas`, and two optional
-files when the set has them. Replay reads the files of the set folder only: a file that leads
-out of it through a link is refused. It never reads or writes inside `gate/` or `sample/`: a set
-folder, `--params`, `--json`, `--svg` and `--png` there are a usage error.
+Nine files of the set, each checked with its validator from `core/schemas`. Replay reads the
+files of the set folder only: a file that leads out of it through a link is refused. It never
+reads or writes inside `gate/` or `sample/`: a set folder, `--params`, `--json`, `--svg` and
+`--png` there are a usage error.
 
 | File | What replay takes from it |
 |---|---|
@@ -42,12 +44,19 @@ folder, `--params`, `--json`, `--svg` and `--png` there are a usage error.
 | `clock_report.json` | the onset P90 the label step wrote, checked against the hand marks |
 | `verdict.json` | the values to compare, and `params_sha256` and `tuning` to find the params |
 | `verdict.md` | checked against the text stage B writes from `verdict.json` (`analysis/gate/verdict-text.ts`) |
-| `marks.jsonl` (optional) | the cue and step marks: the `"mark"` lines of `stamps.jsonl` |
-| `g_resets.json` (optional) | the packets stage B read as reset frames of G |
+| `marks.jsonl` | the cue and step marks: the `"mark"` lines of `stamps.jsonl`; a set without it still replays (see below) |
+| `g_resets.json` | the packets stage B read as reset frames of G; a set without it still replays (see "Readings") |
 
-A set without `verdict.json` is refused with the reason pack leaves it out (the recording does not
-count, or its stage B has not run). A set with `verdict.json` but without `verdict.md` or
-`onsets.json` is refused as not whole.
+A set with `verdict.json` but without `verdict.md`, `stream.jsonl` or `onsets.json` is refused as
+not whole, and so is a set with `verdict.md` but without `verdict.json`.
+
+A set without `verdict.json` is the set of a recording that never reached its verdict: pack writes
+it without the verdict files when the recording does not count or its stage B has not run (PREREG
+sections 7 and 11), and pack A's set of such a recording ends at the step mark of the objection
+block, without `onsets.json`, while part B is held back (PREREG section 7.5). Replay reads each file
+of such a set that it reads in any set, with the same checks (`g_resets.json` against
+`stream.jsonl`, the labels hash and the onset P90 where `onsets.json` is there), prints the
+verdict as not recomputable with that reason, scores nothing, and exits 3 when nothing differs.
 
 ### The params
 
@@ -140,18 +149,28 @@ set", since a mix of the readings could give them.
 
 ## marks.jsonl and g_resets.json
 
-On main, pack publishes neither file; both are an assumption of replay, and `core/schemas`
-`checkPublishedNames` reports them as "not part of data/<id>/" until `PUBLISHED_FILES` lists them
-and pack writes them.
+Pack writes both into every gate set (`analysis/pack.ts` `marksJsonl` and `gResetsJson`), and
+`core/schemas` lists them in `PUBLISHED_FILES` with their validators, `validateMarkLine` and
+`validateGResets`, as files of the gate set only; a headstart set gets neither. A set an earlier
+pack wrote has neither: replay still reads it, and every value that needs them is not
+recomputable from it or is scored under both readings of G.
 
 - `marks.jsonl` holds the `"mark"` lines of `stamps.jsonl` as they are, in file order: step names,
-  cue numbers and sample numbers, no text and no times of words. Replay refuses a line that is not
-  a mark, and marks that do not fit `onsets.json`: cue numbers that do not rise in time order, a
-  reply whose cue has no mark, a reply that ends before the mark of its cue or begins more than
-  10 s after it.
+  cue numbers and sample numbers, no text and no times of words. Its validator takes exactly the
+  three lines Deck writes: a step mark with `n`, `k`, `what` and `name`, a cue mark with `n`, `k`,
+  `i`, `what` and `on`, and a key mark with `n`, `k` and `what`, each with no other field, and
+  step names of lowercase letters, digits and `_`, so no text can ride along. Where pack holds
+  part B back, the file holds the marks before the step mark of the objection block, the ones
+  stage A reads. Replay refuses a line the validator refuses, and marks that do not fit
+  `onsets.json`: cue numbers that do not rise in time order, a reply whose cue has no mark, a reply
+  that ends before the mark of its cue or begins more than 10 s after it.
 - `g_resets.json` is `{"schema":"g-resets/1","seqs":[...]}`: the packets stage B read as reset
-  frames of G (`gResetSeqs` on `samples.jsonl`), in ascending order. Replay refuses a seq that is
-  no packet of `stream.jsonl` with `g` null.
+  frames of G, in ascending order. Pack finds them as stage B does, `gResetSeqs` on the lines of
+  `detector_in.jsonl` and `samples.jsonl`, and keeps the packets of the published `stream.jsonl`
+  (where part B is held back, the ones stage A reads). Pack refuses a recording whose
+  `samples.jsonl` flags a reset frame on a packet with a `g` value, and leaves the file out, with a
+  note, when `samples.jsonl` has a broken line that is not a last line a crash cut short. Replay
+  refuses a seq that is no packet of `stream.jsonl` with `g` null.
 
 Beyond those checks both are trusted as published, like `stream.jsonl`: nothing else in the set
 ties them to the recording.
@@ -181,30 +200,45 @@ differently, and the footnote names them. The SVG is plain, on a white box, with
 scripts; the PNG is that SVG drawn by headless Chrome at twice its size, 1200 px wide, with the
 Chrome of `--chrome <path>` or `PW_CHROMIUM_PATH`, else Playwright's own Chromium.
 
-All three need the cues of every set: without `marks.jsonl` replay writes none of them and exits 1.
+All three need the verdict and the cues of every set: when a set has no `verdict.json` or no
+`marks.jsonl`, replay writes none of them and exits 1.
 
 ## Tests
+
+`analysis/replay/pack-replay.test.ts` runs the chain a clone relies on: synthetic recordings made
+to look as host leaves a real one (the real tap and its SDK in `manifest.json`, every recording
+file hashed by the record step of `ledger.jsonl`), scored by stages A and B, packed by `npm run
+pack`, and replayed from `data/<id>/` alone. It shows that pack A, whose row 5 turns on which
+packets with `g` null were reset frames, and pack B, scored with the params the retune froze under
+`gate-retune`, are verified (exit 0), and pack A is not without its `g_resets.json` (exit 3); that
+one changed number of `verdict.json` exits 1; that the set of a pack A held back at the objection
+block exits 3 with no value differing; and that `--json`, `--svg` and `--png` write the table and
+the figure of two packed sets.
 
 `analysis/replay/replay.test.ts` scores synthetic recordings (`analysis/gate/synth.ts`) with
 stages A and B as `analysis/gate.test.ts` does and publishes them as pack does: `stream.jsonl`
 from `detector_in.jsonl` and `stamps.jsonl`, the other files copied, the unpublished ones left
-out. On those sets it shows that:
+out, with or without `marks.jsonl` and `g_resets.json`. On those sets it shows that:
 
 - with `marks.jsonl`, every value matches but the two recounts of row 4, stage A's tuning
   included, `params_sha256` reads as an input, and replay exits 0, also for a recording whose
   params stage A of the next recording overwrote;
 - without `marks.jsonl` replay exits 3, also when `verdict.json` was changed, `tuning` is an
   input when replay rebuilt the params with it, and `--json` and `--svg` are refused;
+- a set without `verdict.json` and `verdict.md` has its files checked, nothing differs, and replay
+  exits 3, also beside a verified set and without `onsets.json`; `--json` is refused, and so are a
+  `g_resets.json` that names a packet with `g` set and one without `stream.jsonl`;
 - a changed count, row outcome or verdict word, a `k` stage A did not find (also with
   `params_sha256` set to match it), a `run` or `exploratory` stage B never writes, and a changed
   or added line of `verdict.md` each read DIFFERS, and replay exits 1;
 - one changed hand mark makes the labels hash and the onset P90 differ;
 - params with another hash are refused after every place replay looks, and the params are found
   under `gate-retune` and rebuilt without the tags;
-- an empty `stream.jsonl`, a set without `verdict.json`, `verdict.md` or `onsets.json`, a folder
-  that does not exist, a `marks.jsonl` with a line that is not a mark or marks of another
-  recording, a file that leads out of the set folder and a `g_resets.json` that names a packet
-  with `g` set are each refused with the file named, and the other sets are still replayed;
+- an empty `stream.jsonl`, a set with `verdict.md` but without `verdict.json`, a set with
+  `verdict.json` but without `verdict.md` or `onsets.json`, a folder that does not exist, a
+  `marks.jsonl` with a line that is not a mark or marks of another recording, a file that leads
+  out of the set folder and a `g_resets.json` that names a packet with `g` set are each refused
+  with the file named, and the other sets are still replayed;
 - with one packet with `g` null, the counts of row 5 the readings give differently match under
   the reading that gives them, the verdict both readings give alike is verified (exit 0), and a
   changed verdict, outcome or pair of row 5 counts reads DIFFERS; with fourteen, the verdict

@@ -7,13 +7,15 @@
 // input of the replay" for params_sha256 (replay finds the params by it) and for a tuning replay
 // rebuilt the params with. A value that cannot be recomputed is never skipped and never counts as
 // a difference.
-// verdict.md is checked against the text stage B writes from verdict.json.
+// verdict.md is checked against the text stage B writes from verdict.json. A set without
+// verdict.json has no verdict to recompute (replayVerdictless).
 //
-// What stage B reads that a set as pack writes it does not carry (spec 8.7 leaves the files out):
-// - the cue and step marks: "mark" lines of stamps.jsonl (view.ts gateLayout, scoredCues); replay
-//   reads them from set.ts MARKS_FILE when the set has it;
+// What stage B reads from files that are never published (spec 8.7):
+// - the cue and step marks: "mark" lines of stamps.jsonl (view.ts gateLayout, scoredCues); pack
+//   copies them into set.ts MARKS_FILE, and without that file every value that needs them is not
+//   recomputable from the set;
 // - which packets with g null are reset frames of G: lm of the "m" lines of samples.jsonl (rivals
-//   gResetSeqs); replay reads them from set.ts RESETS_FILE when the set has it, else it scores two
+//   gResetSeqs); pack writes them into set.ts RESETS_FILE, and without that file replay scores two
 //   readings, every null a reset and none (gReadings);
 // - the sniff onsets of row 4: audio.wav channel 0 after the sniff_<i> step marks
 //   (clocks/compute.ts recountSniffLag), for best_case_ms and d1_on_sniffs_ms, for every number of
@@ -25,7 +27,7 @@
 
 import { chunkLayout, SNIFF_KILL_MIN_MS, SNIFF_PASS_MAX_MS, type Stamp } from '../../core/clock/index.ts';
 import { d1ParamsFromFrozen, type FrozenParamsLike, type Sign } from '../../core/detector.ts';
-import { combineGateVerdict, GATE_OUTCOMES, VERDICT_ROWS, type GateOutcome, type Verdict } from '../../core/schemas/index.ts';
+import { combineGateVerdict, GATE_OUTCOMES, VERDICT_ROWS, type ClockReport, type GateOutcome, type Onsets, type Verdict } from '../../core/schemas/index.ts';
 import { GateRefusal, RATE, lrtUseFrom, round1, type LrtUse } from '../gate/common.ts';
 import { gSettingsOf, sameJson, variantOf, withoutStageAKeys } from '../gate/frozen.ts';
 import { scoreGate, type GateScore, type GateScoreInput } from '../gate/score.ts';
@@ -39,7 +41,7 @@ import { objectionBlockEnd } from '../lib/conditions.ts';
 import { sha256Hex } from '../lib/ledger.ts';
 import type { LoadedSession } from '../lib/session.ts';
 import { tunedByStageA, tunedStepOf, type ParamsMatch } from './params.ts';
-import { MARKS_FILE, RESETS_FILE, ReplayRefusal, type PublishedSet } from './set.ts';
+import { MARKS_FILE, RESETS_FILE, ReplayRefusal, type PublishedSet, type VerdictlessSet } from './set.ts';
 
 /** INPUT: a value replay takes from the set to find what stage B scored with, so it is no result. */
 export type CheckStatus = 'MATCH' | 'DIFFERS' | 'NOT_RECOMPUTABLE' | 'INPUT';
@@ -177,6 +179,15 @@ export interface SetReplay {
   notes: string[];
   /** Null without the cues: no cue can be scored. */
   scored: ScoredSet | null;
+}
+
+/** The replay of a set without verdict.json: no params, nothing scored; the values of its other files are checked. */
+export interface VerdictlessReplay {
+  set: VerdictlessSet;
+  params: null;
+  checks: Check[];
+  notes: string[];
+  scored: null;
 }
 
 /** Why a value may not be recomputable from the set. */
@@ -533,16 +544,14 @@ export function replaySet(set: PublishedSet, params: ParamsMatch): SetReplay {
   }
 
   // Files of the set beside verdict.json.
-  const labels = onsetsLabelsSha256(set.onsets, sha256Hex);
-  checks.push(plain('onsets.json labels_sha256', 'onsets.json', labels, set.onsets.labels_sha256));
-  checks.push(plain('clock_report.json onset.p90_abs_auto_minus_manual_ms', 'clock_report.json', onsetBlock.p90_abs_auto_minus_manual_ms, set.clockReport.onset?.p90_abs_auto_minus_manual_ms ?? null));
+  checks.push(...onsetChecks(set.onsets, set.clockReport));
   const md = verdictMdCheck(set);
   checks.push(md.check);
   if (md.note !== null) notes.push(md.note);
 
   if (mv.whyNoCues !== null && set.marks === null) {
     notes.push(
-      `stage B takes the cues and the step marks (listening, objections, the first step after the cues) from the "mark" lines of stamps.jsonl (analysis/gate/view.ts); stamps.jsonl is not published (spec 8.7), and neither stream.jsonl nor events.jsonl holds them, so every value that needs them is not recomputable from this set`,
+      `stage B takes the cues and the step marks (listening, objections, the first step after the cues) from the "mark" lines of stamps.jsonl (analysis/gate/view.ts); stamps.jsonl is not published (spec 8.7), neither stream.jsonl nor events.jsonl holds them, and this set has no ${MARKS_FILE}, the copy of those lines that pack writes into a gate set, so every value that needs them is not recomputable from this set`,
     );
   }
   if (g.source === 'file') {
@@ -659,6 +668,40 @@ function verdictMdCheck(set: PublishedSet): { check: Check; note: string | null 
     check,
     note: `verdict.md line ${i + 1} reads ${JSON.stringify(theirs[i] ?? '')}, where stage B writes ${JSON.stringify(mine[i] ?? '')} from verdict.json (analysis/gate/verdict-text.ts)`,
   };
+}
+
+/**
+ * The values the label step writes from onsets.json (analysis/label.ts): labels_sha256, and the
+ * P90 of |auto - manual| in clock_report.json, which stage B reads there.
+ */
+function onsetChecks(onsets: Onsets, clockReport: ClockReport | null): Check[] {
+  const out = [plain('onsets.json labels_sha256', 'onsets.json', onsetsLabelsSha256(onsets, sha256Hex), onsets.labels_sha256)];
+  if (clockReport !== null) {
+    const p90 = onsetErrorBlock(onsets, RATE).p90_abs_auto_minus_manual_ms;
+    out.push(plain('clock_report.json onset.p90_abs_auto_minus_manual_ms', 'clock_report.json', p90, clockReport.onset?.p90_abs_auto_minus_manual_ms ?? null));
+  }
+  return out;
+}
+
+/** Why a set without verdict.json has none to recompute. */
+export const NO_VERDICT =
+  'the set has no verdict.json, so it holds no verdict to recompute: pack writes none for a recording that never reached its verdict, because it does not count or stage B has not run on it (PREREG sections 7 and 11)';
+
+/**
+ * A set without verdict.json (set.ts VerdictlessSet): the verdict is not recomputable, the values
+ * onsets.json gives are checked where the set holds it, and nothing is scored.
+ */
+export function replayVerdictless(set: VerdictlessSet): VerdictlessReplay {
+  const verdict: Check = { name: 'verdict', against: 'verdict.json', recomputed: undefined, candidates: null, published: undefined, status: 'NOT_RECOMPUTABLE', why: NO_VERDICT, condition: null };
+  const checks = [verdict, ...(set.onsets !== null ? onsetChecks(set.onsets, set.clockReport) : [])];
+  const files = set.read.length === 1 ? set.read[0]! : `${set.read.slice(0, -1).join(', ')} and ${set.read[set.read.length - 1]!}`;
+  const notes = [`replay read ${files} of this set and found ${set.read.length === 1 ? 'it' : 'each'} valid (core/schemas); with no verdict it scores nothing`];
+  if (set.pack === 'A' && set.onsets === null) {
+    notes.push(
+      'a set of pack A without a verdict and without onsets.json may end at the step mark of the objection block: pack holds part B back until the stage A hash is in the ledger, and this recording never got one (PREREG section 7.5)',
+    );
+  }
+  return { set, params: null, checks, notes, scored: null };
 }
 
 /** A value of another file of the set: MATCH or DIFFERS. */

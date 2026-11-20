@@ -11,12 +11,18 @@
 // paths and with the --alias names; stream.jsonl from detector_in.jsonl and the arr stamps of
 // stamps.jsonl; copies of events.jsonl, onsets.json, calib.json and clock_report.json; verdict.md
 // and verdict.json (gate only, once the verdict is in the ledger); audio_env.json, the level of both
-// channels of audio.wav every 10 ms; and audio.wav itself, 16 bit, only with --with-audio. Nothing
-// else: never sdk_raw.jsonl.gz, samples.jsonl, stamps.jsonl, detector_in.jsonl, quickcheck.json,
-// ledger.jsonl, timings.json or tap.log. The whole set is checked with validatePublishedFolder and
-// scanned for what the manifest keeps private (a path into a home folder, as an SDK error message
-// can hold, and the system name of a device that --alias replaces) before anything is written,
-// then written into a temporary folder beside data/<id>/ and renamed.
+// channels of audio.wav every 10 ms; and audio.wav itself, 16 bit, only with --with-audio. A gate
+// set also gets the two files npm run replay recomputes its verdict with (analysis/replay/README.md):
+// marks.jsonl, the "mark" lines of stamps.jsonl as they are (sample numbers, cue numbers and step
+// names, no text), and g_resets.json, the packets stage B reads as reset frames of G, which pack
+// finds as stage B does, with rivals gResetSeqs on detector_in.jsonl and samples.jsonl: so pack
+// reads samples.jsonl of a gate recording, and checks it against the ledger like every file it
+// reads. A headstart take gets neither: replay scores gate sets only. Nothing else: never
+// sdk_raw.jsonl.gz, samples.jsonl, stamps.jsonl, detector_in.jsonl, quickcheck.json, ledger.jsonl,
+// timings.json or tap.log. The whole set is checked with validatePublishedFolder and scanned for
+// what the manifest keeps private (a path into a home folder, as an SDK error message can hold, and
+// the system name of a device that --alias replaces) before anything is written, then written into
+// a temporary folder beside data/<id>/ and renamed.
 //
 // --devices-ok      the device and machine names printed are fine as they stand in the published
 //                   manifest. Without it pack prints them and writes nothing (exit 1).
@@ -32,9 +38,10 @@
 // count (quickcheck condition 6 alone, or a technical failure) gets its set without a ledger line,
 // and pack says why in one line, with what comes next by PREREG sections 7 and 11. Part B, the
 // objection block, is released only once the stage A hash is in the ledger (PREREG section 7.5):
-// pack A's set of such a recording ends at the step mark of the block, without onsets.json. Packs
-// B and C keep it, as stage A tunes nothing there (section 11: the parameters are frozen under the
-// tag gate-retune before pack B is recorded). A headstart take has no ledger.
+// pack A's set of such a recording ends at the step mark of the block, without onsets.json, and
+// marks.jsonl and g_resets.json end there as stream.jsonl does. Packs B and C keep it, as stage A
+// tunes nothing there (section 11: the parameters are frozen under the tag gate-retune before
+// pack B is recorded). A headstart take has no ledger.
 // Exit codes: 0 written, 1 refused (nothing written), 2 usage.
 
 import fs from 'node:fs';
@@ -43,6 +50,7 @@ import { pathToFileURL } from 'node:url';
 import { chunkLayout, type EventLine } from '../core/clock/index.ts';
 import type { DetectorInput } from '../core/detector.ts';
 import {
+  G_RESETS_SCHEMA,
   SESSION_ID,
   buildStreamJsonl,
   canAppendStep,
@@ -63,6 +71,7 @@ import {
   validateManifest,
   validatePublishedFolder,
   validateQuickcheck,
+  validateSampleLine,
   validateStampLine,
   verifyLedger,
   type ClockReport,
@@ -81,14 +90,15 @@ import { SESSION_FILES } from './lib/session.ts';
 import { gateSteps } from './lib/steps.ts';
 import { readSessionAudio, type SessionAudio } from './pack/audio.ts';
 import { PackRefusal, formatBytes, groupDigits, whyNoSet, whyNotMeasured } from './pack/rules.ts';
+import { gResetSeqs, type SampleLmLike } from './rivals/index.ts';
 
 export const USAGE =
   'usage: npm run pack -- <id> --devices-ok [--alias "<system name>=<published name>"]... [--with-audio <id>] [--replace]';
 
 /** Files of data/<id>/ in the order pack writes and prints them. */
 export const SET_ORDER = [
-  'manifest.json', 'stream.jsonl', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json',
-  'verdict.md', 'verdict.json', 'audio_env.json', 'audio.wav',
+  'manifest.json', 'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'events.jsonl', 'onsets.json', 'calib.json',
+  'clock_report.json', 'verdict.md', 'verdict.json', 'audio_env.json', 'audio.wav',
 ] as const;
 
 /** Copied byte for byte when the session has them (spec 8.7). */
@@ -426,11 +436,21 @@ function cutOf(plan: LedgerPlan): number | null {
   return plan.mode === 'skip' ? plan.cutAt : null;
 }
 
-/** Reads every file the set is made from, audio.wav in one pass (its levels, its hash, the 16-bit copy). */
+/**
+ * Reads every file the set is made from, audio.wav in one pass (its levels, its hash, the 16-bit
+ * copy). samples.jsonl only for a gate record, for g_resets.json; it is never published.
+ */
 function readSources(dir: string, manifestBytes: Buffer, args: PackArgs, plan: LedgerPlan): Sources {
   const bytes = new Map<string, Buffer | null>();
   const hashes = new Map<string, string | null>([[SESSION_FILES.manifest, sha256Hex(manifestBytes)]]);
-  const names = [SESSION_FILES.detectorIn, SESSION_FILES.stamps, SESSION_FILES.events, ...COPIED_FILES, ...(plan.mode === 'append' ? VERDICT_FILES : [])];
+  const names = [
+    SESSION_FILES.detectorIn,
+    SESSION_FILES.stamps,
+    SESSION_FILES.events,
+    ...(plan.mode === 'none' ? [] : [SESSION_FILES.samples]),
+    ...COPIED_FILES,
+    ...(plan.mode === 'append' ? VERDICT_FILES : []),
+  ];
   for (const name of names) {
     const b = readSessionFile(dir, name);
     bytes.set(name, b);
@@ -487,6 +507,67 @@ function eventsBefore(complete: string, nCut: number): string {
   return kept.length === 0 ? '' : `${kept.join('\n')}\n`;
 }
 
+/**
+ * marks.jsonl of a gate set: the "mark" lines of stamps.jsonl as they are, in file order, from
+ * which stage B lays out its steps and cues (analysis/gate/view.ts gateLayout, scoredCues). With
+ * `nCut`, those before it, the marks stage A reads (view.ts stampsBefore). A last line a crash cut
+ * short is left out, as stream.jsonl leaves it out; a mark line that is not valid stays, for
+ * validatePublishedFolder to refuse.
+ */
+export function marksJsonl(stamps: string, nCut: number | null): string {
+  const kept = splitJsonlLines(splitTruncatedTail(stamps).complete).filter((line) => {
+    let v: unknown;
+    try {
+      v = JSON.parse(line) as unknown;
+    } catch {
+      return false;
+    }
+    if (!isPlainObject(v) || v['k'] !== 'mark') return false;
+    const n = v['n'];
+    return nCut === null || typeof n !== 'number' || n < nCut;
+  });
+  return kept.length === 0 ? '' : `${kept.join('\n')}\n`;
+}
+
+/**
+ * g_resets.json of a gate set: the packets stage B reads as reset frames of G, found as stage B
+ * finds them, rivals gResetSeqs on the lines of detector_in.jsonl and samples.jsonl
+ * (analysis/gate/stage-b.ts), kept to the packets of the published stream.jsonl. Before a cut those
+ * are the packets stage A reads, and the seqs the ones it finds (stage-a.ts: view.ts samplesBefore
+ * keeps the samples.jsonl line of each of them). A last line of samples.jsonl that a crash cut short
+ * is dropped, as stream.jsonl drops one; with a broken line anywhere else the set gets no
+ * g_resets.json (null), as stage B reads every line of samples.jsonl and scores no such recording
+ * (analysis/gate/inputs.ts requireInputsWhole). live/reduce.cjs writes g null on every reset frame,
+ * and replay checks that each listed packet has it, so files that disagree are refused here.
+ */
+export function gResetsJson(detectorIn: string, samples: string, stream: string, notes: string[]): string | null {
+  const tail = splitTruncatedTail(samples);
+  if (tail.tail !== null) notes.push(`samples.jsonl line ${String(tail.tailLine)}: partial last line dropped (no newline, not valid JSON: the recording was cut off)`);
+  const parsed = parseJsonl(tail.complete, validateSampleLine, { file: SESSION_FILES.samples });
+  if (parsed.errors.length > 0) {
+    const more = parsed.errors.length > 1 ? ` (and ${groupDigits(parsed.errors.length - 1)} more)` : '';
+    notes.push(
+      `the set has no g_resets.json: ${parsed.errors[0]!}${more}, so samples.jsonl does not tell which packets with g null were reset frames of G; stage B reads every line of it and scores no such recording`,
+    );
+    return null;
+  }
+  const inputs = parseJsonl(splitTruncatedTail(detectorIn).complete, validateDetectorInLine, { file: SESSION_FILES.detectorIn }).rows as unknown as DetectorInput[];
+  const gBySeq = new Map<number, number | null>();
+  for (const line of splitJsonlLines(stream)) {
+    const row = JSON.parse(line) as { k: string; seq?: unknown; g?: number | null };
+    if (row.k === 'batch' && typeof row.seq === 'number') gBySeq.set(row.seq, row.g ?? null);
+  }
+  const seqs = [...gResetSeqs(inputs, parsed.rows as unknown as SampleLmLike[]).seqs].filter((seq) => gBySeq.has(seq)).sort((a, b) => a - b);
+  const withG = seqs.filter((seq) => gBySeq.get(seq) !== null);
+  if (withG.length > 0) {
+    const shown = withG.slice(0, 5).join(', ') + (withG.length > 5 ? ` and ${groupDigits(withG.length - 5)} more` : '');
+    throw new PackRefusal(
+      `samples.jsonl flags the landmark frame of packet ${shown} as a reset of G, but detector_in.jsonl holds a g value there, while live/reduce.cjs writes g null on every reset frame: the two files disagree, and replay would refuse g_resets.json. Report the recording as broken with these packet numbers; pack publishes no set of it`,
+    );
+  }
+  return toJsonText({ schema: G_RESETS_SCHEMA, seqs }, null);
+}
+
 interface BuiltSet {
   files: Map<string, Buffer>;
   notes: string[];
@@ -494,8 +575,8 @@ interface BuiltSet {
 
 /**
  * The files of data/<id>/ from the sources (spec 8.7), in memory. With `cut` (part B held back)
- * stream.jsonl, events.jsonl, audio_env.json and audio.wav end before that sample, and onsets.json
- * stays out.
+ * stream.jsonl, marks.jsonl, g_resets.json, events.jsonl, audio_env.json and audio.wav end before
+ * that sample, and onsets.json stays out.
  */
 function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: number | null): BuiltSet {
   const notes: string[] = [];
@@ -506,6 +587,7 @@ function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: nu
 
   const detectorIn = source(SESSION_FILES.detectorIn);
   const stamps = source(SESSION_FILES.stamps);
+  let streamText: string | null = null;
   if (detectorIn !== null) {
     if (stamps === null) throw new PackRefusal('detector_in.jsonl is there but stamps.jsonl is missing: stream.jsonl takes nArr from its arr stamps (spec 8.7)');
     const stream = cut === null ? buildStreamJsonl(detectorIn.toString('utf8'), stamps.toString('utf8')) : streamBefore(detectorIn.toString('utf8'), stamps.toString('utf8'), cut);
@@ -516,8 +598,21 @@ function buildSet(published: Manifest, sources: Sources, args: PackArgs, cut: nu
       notes.push(`stream.jsonl: the last ${n === 1 ? 'packet has' : `${groupDigits(n)} packets have`} no arr stamp (Deck had stopped), so nArr is null there`);
     }
     files.set('stream.jsonl', Buffer.from(stream.text, 'utf8'));
+    streamText = stream.text;
   } else {
     notes.push('the session has no detector_in.jsonl, so the set has no stream.jsonl');
+  }
+
+  // A gate set: what npm run replay needs beside stream.jsonl (see the head of this file).
+  if (published.kind === 'gate') {
+    if (stamps !== null) files.set('marks.jsonl', Buffer.from(marksJsonl(stamps.toString('utf8'), cut), 'utf8'));
+    else notes.push('the session has no stamps.jsonl, so the set has no marks.jsonl');
+    const samples = source(SESSION_FILES.samples);
+    if (detectorIn !== null && streamText !== null) {
+      const resets = samples === null ? null : gResetsJson(detectorIn.toString('utf8'), samples.toString('utf8'), streamText, notes);
+      if (resets !== null) files.set('g_resets.json', Buffer.from(resets, 'utf8'));
+      else if (samples === null) notes.push('the session has no samples.jsonl, so the set has no g_resets.json: it does not say which packets with g null were reset frames of G');
+    }
   }
 
   const events = source(SESSION_FILES.events);
@@ -672,7 +767,10 @@ export function holdsHomePath(s: string): boolean {
 }
 
 /** Files of a set whose strings are scanned: every file but manifest.json, which has its own checks, and audio.wav. */
-const SCANNED_FILES = ['stream.jsonl', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json', 'verdict.md', 'verdict.json', 'audio_env.json'] as const;
+const SCANNED_FILES = [
+  'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json', 'verdict.md',
+  'verdict.json', 'audio_env.json',
+] as const;
 
 /**
  * Strings of the set that publish what the manifest keeps private (spec 8.7): a home folder path

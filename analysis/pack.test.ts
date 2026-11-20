@@ -33,14 +33,16 @@ import {
   type Manifest,
   type Quickcheck,
   type RecordKind,
+  type SamplePacket,
 } from '../core/schemas/index.ts';
 import { nextRecordingAdvice } from './gate/inputs.ts';
 import { sha256Hex } from './lib/ledger.ts';
 import { gateSteps } from './lib/steps.ts';
 import { encodeStereoFloatWav, readWavHeader } from './lib/wav.ts';
-import { SET_ORDER, holdsHomePath, main, parsePackArgs, type PackDeps } from './pack.ts';
+import { SET_ORDER, gResetsJson, holdsHomePath, main, marksJsonl, parsePackArgs, type PackDeps } from './pack.ts';
 import { ENV_STEP_FRAMES, SILENCE_DB, levelDb, readSessionAudio } from './pack/audio.ts';
 import { formatBytes, whyNoSet, whyNotMeasured } from './pack/rules.ts';
+import { gResetSeqs, type SampleLmLike } from './rivals/index.ts';
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -166,6 +168,10 @@ interface RecordingOptions {
   events?: readonly object[];
   /** Lines of stamps.jsonl; default stampsOf(objectionStep). */
   stamps?: readonly object[];
+  /** Lines of detector_in.jsonl; default DETECTOR_IN. */
+  detectorIn?: readonly object[];
+  /** Lines of samples.jsonl, or its text; default exampleSamples(). */
+  samples?: readonly object[] | string;
 }
 
 function put(dir: string, name: string, body: string | Buffer, hashes?: Record<string, string>): string {
@@ -184,8 +190,8 @@ function writeRecording(o: RecordingOptions): Recording {
   const a = knownAudio();
   put(dir, 'audio.wav', encodeStereoFloatWav(a.ch0, a.ch1), hashes);
   put(dir, 'stamps.jsonl', toJsonlText(o.stamps ?? stampsOf(o.objectionStep ?? null), 'stamps.jsonl'), hashes);
-  put(dir, 'samples.jsonl', toJsonlText(exampleSamples(), 'samples.jsonl'), hashes);
-  put(dir, 'detector_in.jsonl', toJsonlText(DETECTOR_IN, 'detector_in.jsonl'), hashes);
+  put(dir, 'samples.jsonl', typeof o.samples === 'string' ? o.samples : toJsonlText(o.samples ?? exampleSamples(), 'samples.jsonl'), hashes);
+  put(dir, 'detector_in.jsonl', toJsonlText(o.detectorIn ?? DETECTOR_IN, 'detector_in.jsonl'), hashes);
   put(dir, 'events.jsonl', toJsonlText(o.events ?? exampleEvents(), 'events.jsonl'), hashes);
   put(dir, 'calib.json', toJsonText(exampleCalib(), 'calib.json', 2), hashes);
   put(dir, 'sdk_raw.jsonl.gz', Buffer.from([0x1f, 0x8b, 8, 0, 1, 2, 3, 4]), hashes);
@@ -227,6 +233,8 @@ interface GateOptions {
   manifest?: (m: Manifest) => Manifest;
   events?: readonly object[];
   stamps?: readonly object[];
+  detectorIn?: readonly object[];
+  samples?: readonly object[] | string;
 }
 
 interface Gate extends Recording {
@@ -243,6 +251,8 @@ function writeGate(o: GateOptions): Gate {
     ...(o.manifest ? { manifest: o.manifest } : {}),
     ...(o.events ? { events: o.events } : {}),
     ...(o.stamps ? { stamps: o.stamps } : {}),
+    ...(o.detectorIn ? { detectorIn: o.detectorIn } : {}),
+    ...(o.samples ? { samples: o.samples } : {}),
   });
   const lines: string[] = [];
   let minute = 10;
@@ -307,6 +317,12 @@ function setDir(id: string): string {
 
 function namesIn(dir: string): string[] {
   return fs.readdirSync(dir).sort();
+}
+
+/** The "mark" lines of stamps.jsonl in a session folder, as the file holds them. */
+function markLinesOf(dir: string): string {
+  const lines = splitJsonlLines(fs.readFileSync(path.join(dir, 'stamps.jsonl'), 'utf8')).filter((l) => (JSON.parse(l) as { k: string }).k === 'mark');
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`;
 }
 
 function readSet(id: string): Record<string, string | null> {
@@ -825,10 +841,15 @@ describe('a gate recording whose verdict is in the ledger', () => {
     expect(r.err).toEqual([]);
     expect(r.code).toBe(0);
     expect(namesIn(setDir('gate-b'))).toEqual([
-      'audio_env.json', 'calib.json', 'clock_report.json', 'events.jsonl', 'manifest.json', 'onsets.json', 'stream.jsonl', 'verdict.json', 'verdict.md',
+      'audio_env.json', 'calib.json', 'clock_report.json', 'events.jsonl', 'g_resets.json', 'manifest.json', 'marks.jsonl', 'onsets.json', 'stream.jsonl',
+      'verdict.json', 'verdict.md',
     ]);
     const set = readSet('gate-b');
     expect(validatePublishedFolder(set)).toEqual([]);
+    // What npm run replay needs: the mark lines of stamps.jsonl as they are, and the packets stage B
+    // reads as reset frames of G (packet 3 has g null and no line in samples.jsonl).
+    expect(set['marks.jsonl']).toBe(markLinesOf(g.dir));
+    expect(set['g_resets.json']).toBe('{"schema":"g-resets/1","seqs":[3]}\n');
     for (const name of ['events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json', 'verdict.md', 'verdict.json']) {
       expect(fs.readFileSync(path.join(setDir('gate-b'), name)), name).toEqual(fs.readFileSync(path.join(g.dir, name)));
     }
@@ -941,10 +962,12 @@ describe('a gate recording without a verdict', () => {
       'note: part B, the objection block, is published without a stage A line in ledger.jsonl: on packs B and C stage A tunes nothing, as PREREG section 11 freezes the parameters under the tag gate-retune before pack B is recorded, and its numbers enter the pooled ones',
     );
     // No verdict files in such a set; the rest as for any record, after the step mark too.
-    expect(namesIn(setDir('gate-b'))).toEqual(['audio_env.json', 'calib.json', 'events.jsonl', 'manifest.json', 'stream.jsonl']);
+    expect(namesIn(setDir('gate-b'))).toEqual(['audio_env.json', 'calib.json', 'events.jsonl', 'g_resets.json', 'manifest.json', 'marks.jsonl', 'stream.jsonl']);
     const set = readSet('gate-b');
     expect(validatePublishedFolder(set)).toEqual([]);
     expect(set['stream.jsonl']).toBe(toJsonlText(STREAM, 'stream.jsonl'));
+    expect(set['marks.jsonl']).toBe(markLinesOf(g.dir));
+    expect(set['g_resets.json']).toBe('{"schema":"g-resets/1","seqs":[3]}\n');
     expect(JSON.parse(set['audio_env.json']!)).toMatchObject({ mic_db: knownAudio().mic });
   });
 
@@ -961,7 +984,9 @@ describe('a gate recording without a verdict', () => {
     expect(r.out).toContain(
       'note: part B, the objection block, is published without a stage A line in ledger.jsonl: on packs B and C stage A tunes nothing, as PREREG section 11 freezes the parameters under the tag gate-retune before pack B is recorded',
     );
-    expect(namesIn(setDir('gate-c'))).toEqual(['audio_env.json', 'calib.json', 'clock_report.json', 'events.jsonl', 'manifest.json', 'stream.jsonl']);
+    expect(namesIn(setDir('gate-c'))).toEqual([
+      'audio_env.json', 'calib.json', 'clock_report.json', 'events.jsonl', 'g_resets.json', 'manifest.json', 'marks.jsonl', 'stream.jsonl',
+    ]);
   });
 
   it.each([
@@ -1033,11 +1058,17 @@ describe('a gate recording without a verdict', () => {
     );
     // onsets.json is in the session folder, but not in the set.
     expect(fs.existsSync(path.join(g.dir, 'onsets.json'))).toBe(true);
-    expect(namesIn(setDir('gate-a'))).toEqual(['audio.wav', 'audio_env.json', 'calib.json', 'clock_report.json', 'events.jsonl', 'manifest.json', 'stream.jsonl']);
+    expect(namesIn(setDir('gate-a'))).toEqual([
+      'audio.wav', 'audio_env.json', 'calib.json', 'clock_report.json', 'events.jsonl', 'g_resets.json', 'manifest.json', 'marks.jsonl', 'stream.jsonl',
+    ]);
     const set = readSet('gate-a');
     expect(validatePublishedFolder(set, { audio: true })).toEqual([]);
     // stream.jsonl: the three packets that arrived before n 1500; the voice and state lines at 1700 are out.
     expect(set['stream.jsonl']).toBe(toJsonlText(STREAM.slice(0, 3), 'stream.jsonl'));
+    // marks.jsonl: the marks before n 1500, as stage A reads them; the step mark of the block is at 1500.
+    expect(set['marks.jsonl']).toBe('');
+    // g_resets.json: packet 3 arrived at n 1200, before the cut.
+    expect(set['g_resets.json']).toBe('{"schema":"g-resets/1","seqs":[3]}\n');
     // events.jsonl: lines before the mark; a line without n stays only before the first line after it.
     expect(set['events.jsonl']).toBe(toJsonlText(EVENTS_AROUND_MARK.slice(0, 2), 'events.jsonl'));
     // audio_env.json: 1500 frames, three full steps and 60 frames of the fourth.
@@ -1124,6 +1155,194 @@ describe('a gate recording without a verdict', () => {
     expect(r.code).toBe(1);
     expect(r.err.join('\n')).toContain('onsets.json: no step line of ledger.jsonl holds its hash');
     expect(fs.existsSync(e.data)).toBe(false);
+  });
+});
+
+describe('marks.jsonl and g_resets.json of a gate set (for npm run replay)', () => {
+  /** Every sort of mark between the arr stamps of the packets; the objection block starts at n 1500. */
+  function markedStamps(pack: GatePack, arrs: readonly [number, number][]): object[] {
+    const s = gateSteps(pack);
+    const marks: object[] = [
+      { n: 100, k: 'mark', what: 'step', name: s.listening },
+      { n: 700, k: 'voice', on: true },
+      { n: 1000, k: 'mark', what: 'key' },
+      { n: 1500, k: 'mark', what: 'step', name: s.objections },
+      { n: 1600, k: 'mark', what: 'step', name: s.cueOn[0]! },
+      { n: 1600, k: 'mark', i: 0, what: 'cue', on: true },
+      { n: 1650, k: 'mark', i: 0, what: 'cue', on: false },
+    ];
+    const lines = [...marks, ...arrs.map(([seq, n]) => ({ n, k: 'arr', seq }))].sort((a, b) => (a as { n: number }).n - (b as { n: number }).n);
+    return [{ n: 0, k: 'chunk', frames: 4 * STEP + 100 }, ...lines];
+  }
+
+  /** A batch of detector_in.jsonl. */
+  const batch = (seq: number, g: number | null): object => ({ k: 'batch', seq, tr: [[T0 + seq * 33_333, -0.4]], talk: [[T0 + seq * 33_333, 0]], g, hm: g === null ? null : 0.002 });
+
+  /** A samples.jsonl packet line: lm the landmark frame (reset 0 or 1) or null (no frame). */
+  function packet(seq: number, lm: 0 | 1 | null): object {
+    const m = exampleSamples()[0] as SamplePacket;
+    const g = lm === 0 ? m.g : null;
+    return { ...m, seq, g, hm: g === null ? null : m.hm, lm: lm === null ? null : { ...m.lm!, reset: lm } };
+  }
+
+  // Packet 3: a frame with the reset flag. Packet 4: no landmark frame. Packet 5: g null, and no line
+  // of samples.jsonl says why (taken as a reset). Packet 6: as 3, after the objection block began.
+  const DETECTOR_IN_G = [batch(1, 0.03), { k: 'val', seq: 2, code: 0 }, batch(3, null), batch(4, null), batch(5, null), batch(6, null)];
+  const SAMPLES_G = [packet(1, 0), packet(3, 1), packet(4, null), packet(6, 1)];
+  const ARRS_G: [number, number][] = [[1, 600], [2, 900], [3, 1200], [4, 1300], [5, 1400], [6, 1800]];
+
+  it('marks.jsonl holds every "mark" line of stamps.jsonl as it is, in file order (step, cue and key marks), and no other stamp', async () => {
+    const g = writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', stamps: markedStamps('B', [[1, 600], [2, 900], [3, 1200]]) });
+    const r = await pack(['gate-b', ...OK]);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    const set = readSet('gate-b');
+    expect(validatePublishedFolder(set)).toEqual([]);
+    const lines = splitJsonlLines(set['marks.jsonl']!);
+    expect(lines.map((l) => (JSON.parse(l) as { what: string }).what)).toEqual(['step', 'key', 'step', 'step', 'cue', 'cue']);
+    expect(set['marks.jsonl']).toBe(markLinesOf(g.dir));
+    // The lines are those of stamps.jsonl byte for byte: none is written again.
+    const stamps = fs.readFileSync(path.join(g.dir, 'stamps.jsonl'), 'utf8');
+    for (const line of lines) expect(stamps.includes(`${line}\n`)).toBe(true);
+    // The pack step holds their hashes, as of every file of the set.
+    expect(lastLedgerLine(g.ledgerText()).out_sha256['data/gate-b/marks.jsonl']).toBe(sha256Hex(set['marks.jsonl']!));
+    expect(lastLedgerLine(g.ledgerText()).out_sha256['data/gate-b/g_resets.json']).toBe(sha256Hex(set['g_resets.json']!));
+    // pack lists them after stream.jsonl, in SET_ORDER.
+    const listed = r.out.slice(r.out.findIndex((l) => l.startsWith('pack: wrote ')) + 1).filter((l) => l.startsWith('  '));
+    expect(listed.map((l) => l.trim().split(/\s+/)[0])).toEqual([
+      'manifest.json', 'stream.jsonl', 'marks.jsonl', 'g_resets.json', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json', 'verdict.md',
+      'verdict.json', 'audio_env.json',
+    ]);
+  });
+
+  it('g_resets.json lists the packets gResetSeqs finds on detector_in.jsonl and samples.jsonl, as stage B calls it: a frame with the reset flag and a null g samples.jsonl does not explain, never a packet without a landmark frame', async () => {
+    writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', stamps: markedStamps('B', ARRS_G), detectorIn: DETECTOR_IN_G, samples: SAMPLES_G });
+    const r = await pack(['gate-b', ...OK]);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    const set = readSet('gate-b');
+    expect(validatePublishedFolder(set)).toEqual([]);
+    expect(set['g_resets.json']).toBe('{"schema":"g-resets/1","seqs":[3,5,6]}\n');
+    const stageB = gResetSeqs(DETECTOR_IN_G as never, SAMPLES_G as SampleLmLike[]);
+    expect([...stageB.seqs].sort((a, b) => a - b)).toEqual([3, 5, 6]);
+    expect({ flagged: stageB.flagged, noFrame: stageB.noFrame, unknown: stageB.unknown }).toEqual({ flagged: 2, noFrame: 1, unknown: 1 });
+    // Each listed packet has g null in stream.jsonl, as replay checks.
+    const gOf = new Map(splitJsonlLines(set['stream.jsonl']!).map((l) => JSON.parse(l) as { k: string; seq?: number; g?: number | null }).filter((x) => x.k === 'batch').map((x) => [x.seq, x.g]));
+    for (const seq of [3, 4, 5, 6]) expect(gOf.get(seq)).toBeNull();
+  });
+
+  it('pack A held back at the step mark of the objection block: marks.jsonl and g_resets.json end where stream.jsonl ends, as stage A reads them (PREREG section 7.5)', async () => {
+    const report: ClockReport = { ...exampleClockReport(), trace_valid: false, hard: { ...exampleClockReport().hard, trace_rate_median: 12 } };
+    writeGate({ id: 'gate-a', pack: 'A', stage: 'label', quickcheck: 'technical', clockReport: report, stamps: markedStamps('A', ARRS_G), detectorIn: DETECTOR_IN_G, samples: SAMPLES_G });
+    const r = await pack(['gate-a', ...OK]);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(r.out.some((l) => l.startsWith('note: part B, the objection block from sample 1,500 (4:15) on, is held back'))).toBe(true);
+    const set = readSet('gate-a');
+    expect(validatePublishedFolder(set)).toEqual([]);
+    // Packets 1 to 5 arrived before n 1500; packet 6 at n 1800 is part B.
+    expect(splitJsonlLines(set['stream.jsonl']!).map((l) => (JSON.parse(l) as { seq?: number }).seq)).toEqual([1, 2, 3, 4, 5]);
+    expect(set['g_resets.json']).toBe('{"schema":"g-resets/1","seqs":[3,5]}\n');
+    // The marks before the step mark of the block (view.ts stampsBefore): the listening step and the key.
+    expect(splitJsonlLines(set['marks.jsonl']!).map((l) => (JSON.parse(l) as { n: number }).n)).toEqual([100, 1000]);
+    expect(set['marks.jsonl']!.includes(gateSteps('A').objections)).toBe(false);
+  });
+
+  it('refuses a samples.jsonl that changed after the record step, or a link: pack reads it and checks it as every file it reads', async () => {
+    const g = writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict' });
+    fs.appendFileSync(path.join(g.dir, 'samples.jsonl'), `${JSON.stringify(exampleSamples()[2])}\n`);
+    let r = await pack(['gate-b', ...OK]);
+    expect(r.code).toBe(1);
+    expect(r.err.join('\n')).toContain('samples.jsonl changed after step record wrote it');
+    expectNothingWritten('gate-b');
+
+    const h = writeGate({ id: 'gate-c', pack: 'C', stage: 'verdict' });
+    fs.renameSync(path.join(h.dir, 'samples.jsonl'), path.join(e.root, 'samples.jsonl'));
+    fs.symlinkSync(path.join(e.root, 'samples.jsonl'), path.join(h.dir, 'samples.jsonl'));
+    r = await pack(['gate-c', ...OK]);
+    expect(r.code).toBe(1);
+    expect(r.err.join('\n')).toContain('samples.jsonl in');
+    expect(r.err.join('\n')).toContain('is a link');
+    expectNothingWritten('gate-c');
+  });
+
+  it('refuses a recording whose samples.jsonl flags a reset frame where detector_in.jsonl holds a g value: the files disagree', async () => {
+    const g = writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', samples: [packet(1, 1), packet(3, null)] });
+    const before = g.ledgerText();
+    const r = await pack(['gate-b', ...OK]);
+    expect(r.code).toBe(1);
+    expect(r.err.join('\n')).toContain(
+      'samples.jsonl flags the landmark frame of packet 1 as a reset of G, but detector_in.jsonl holds a g value there, while live/reduce.cjs writes g null on every reset frame: the two files disagree, and replay would refuse g_resets.json. Report the recording as broken with these packet numbers; pack publishes no set of it',
+    );
+    expect(g.ledgerText()).toBe(before);
+    expectNothingWritten('gate-b');
+  });
+
+  it('a samples.jsonl cut short by a crash: the partial last line is dropped; with a broken line before it the set is written without g_resets.json', async () => {
+    const whole = toJsonlText(exampleSamples(), 'samples.jsonl');
+    const technical = { stage: 'quickcheck', quickcheck: 'technical', objectionsReached: false } as const;
+    writeGate({ id: 'gate-b', pack: 'B', ...technical, samples: `${whole}{"seq":5419,"k":"m","tArr` });
+    let r = await pack(['gate-b', ...OK]);
+    expect(r.code).toBe(0);
+    expect(r.out).toContain('note: samples.jsonl line 4: partial last line dropped (no newline, not valid JSON: the recording was cut off)');
+    expect(readSet('gate-b')['g_resets.json']).toBe('{"schema":"g-resets/1","seqs":[3]}\n');
+
+    const lines = whole.split('\n');
+    lines[1] = '{"seq":5418,"k":"v","tArrNs":"812345712345678"';
+    writeGate({ id: 'gate-c', pack: 'C', ...technical, samples: lines.join('\n') });
+    r = await pack(['gate-c', ...OK]);
+    expect(r.code).toBe(0);
+    const note = r.out.find((l) => l.startsWith('note: the set has no g_resets.json: samples.jsonl line 2: not valid JSON'));
+    expect(note).toBeDefined();
+    expect(note).toContain('so samples.jsonl does not tell which packets with g null were reset frames of G; stage B reads every line of it and scores no such recording');
+    expect(namesIn(setDir('gate-c'))).toEqual(['audio_env.json', 'calib.json', 'events.jsonl', 'manifest.json', 'marks.jsonl', 'stream.jsonl']);
+    expect(validatePublishedFolder(readSet('gate-c'))).toEqual([]);
+  });
+
+  it('refuses a mark line that would publish more than a mark: a step name that is not a name of the scenario', async () => {
+    const stamps = [...stampsOf(null), { n: 1600, k: 'mark', what: 'step', name: 'Breathe in' }];
+    writeGate({ id: 'gate-b', pack: 'B', stage: 'verdict', stamps });
+    const r = await pack(['gate-b', ...OK]);
+    expect(r.code).toBe(1);
+    expect(r.err.join('\n')).toContain('the set for data/gate-b/ would not be valid (spec 8.7)');
+    expect(r.err.join('\n')).toContain('marks.jsonl line 1: name: expected a step name of the scenario (lowercase letters, digits and _)');
+    expectNothingWritten('gate-b');
+  });
+
+  it('a headstart take gets neither file, and pack does not read its samples.jsonl', async () => {
+    const rec = headstart('headstart-1');
+    fs.renameSync(path.join(rec.dir, 'samples.jsonl'), path.join(e.root, 'samples.jsonl'));
+    fs.symlinkSync(path.join(e.root, 'samples.jsonl'), path.join(rec.dir, 'samples.jsonl'));
+    const r = await pack(['headstart-1', ...OK]);
+    expect(r.err).toEqual([]);
+    expect(r.code).toBe(0);
+    expect(namesIn(setDir('headstart-1'))).toEqual(['audio_env.json', 'calib.json', 'events.jsonl', 'manifest.json', 'stream.jsonl']);
+  });
+
+  it('marksJsonl and gResetsJson: the text of the two files from the session texts', () => {
+    const stamps = [
+      '{"n":0,"k":"chunk","frames":4096}',
+      '{"n":10,"k":"mark","what":"step","name":"listening"}',
+      '{"n":20,"k":"arr","seq":1}',
+      '{"n":30,"k":"mark","i":0,"what":"cue","on":true}',
+      '{"n":40,"k":"mark","what":"key"}',
+    ].join('\n');
+    expect(marksJsonl(`${stamps}\n`, null)).toBe('{"n":10,"k":"mark","what":"step","name":"listening"}\n{"n":30,"k":"mark","i":0,"what":"cue","on":true}\n{"n":40,"k":"mark","what":"key"}\n');
+    // A last line a crash cut short is left out; with a cut, the marks before it.
+    expect(marksJsonl(`${stamps}\n{"n":50,"k":"mark","wh`, null)).toBe(marksJsonl(`${stamps}\n`, null));
+    expect(marksJsonl(`${stamps}\n`, 30)).toBe('{"n":10,"k":"mark","what":"step","name":"listening"}\n');
+    expect(marksJsonl(`${stamps}\n`, 10)).toBe('');
+    expect(marksJsonl('', null)).toBe('');
+
+    const detectorIn = toJsonlText(DETECTOR_IN, 'detector_in.jsonl');
+    const stream = toJsonlText(STREAM, 'stream.jsonl');
+    const notes: string[] = [];
+    expect(gResetsJson(detectorIn, toJsonlText(exampleSamples(), 'samples.jsonl'), stream, notes)).toBe('{"schema":"g-resets/1","seqs":[3]}\n');
+    // Packet 3 framed without a landmark frame: a null g that is no reset.
+    expect(gResetsJson(detectorIn, toJsonlText([packet(3, null)], 'samples.jsonl'), stream, notes)).toBe('{"schema":"g-resets/1","seqs":[]}\n');
+    // Only packets of the published stream.jsonl: none when it holds none.
+    expect(gResetsJson(detectorIn, '', toJsonlText(STREAM.slice(0, 2), 'stream.jsonl'), notes)).toBe('{"schema":"g-resets/1","seqs":[]}\n');
+    expect(notes).toEqual([]);
   });
 });
 
@@ -1240,7 +1459,10 @@ describe('what the set never holds (spec 8.7)', () => {
         expect(names, `${id} ${never}`).not.toContain(never);
       }
       for (const n of names) expect((SET_ORDER as readonly string[]).includes(n), n).toBe(true);
+      // Fields only samples.jsonl holds (its arrival times and landmark frames) reach no file of the set.
+      for (const [name, text] of Object.entries(readSet(id))) if (text !== null) expect(text, `${id} ${name}`).not.toMatch(/"(tArrNs|tsCbUs|lm)"/);
     }
+    expect(namesIn(setDir('gate-b'))).toEqual(expect.arrayContaining(['marks.jsonl', 'g_resets.json']));
     expect(formatBytes(1)).toBe('1 byte');
     expect(formatBytes(1234567)).toBe('1,234,567 bytes');
   });

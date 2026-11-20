@@ -1,9 +1,10 @@
 // Published set data/<id>/ (spec 8.7, 12.4): stream.jsonl and its converter from
-// detector_in.jsonl, audio_env.json, sentence_ends.json, planted_times.json, the public
-// manifest.json, and the lists of what may be published or committed (spec 13.4 "Чистота").
+// detector_in.jsonl, audio_env.json, sentence_ends.json, planted_times.json, marks.jsonl and
+// g_resets.json of a gate set, the public manifest.json, and the lists of what may be published
+// or committed (spec 13.4 "Чистота").
 
 import {
-  arrayOf, bool, byKind, fail, int, isPlainObject, lit, makeValidator, nullable, num, obj, oneOf, str,
+  arrayOf, bool, byKind, describe, fail, int, isPlainObject, lit, makeValidator, nullable, num, obj, oneOf, str,
   type Spec, type Validator,
 } from './check.ts';
 import {
@@ -269,6 +270,68 @@ export const validatePlantedTimes: Validator<PlantedTimes> = makeValidator(
   }),
 );
 
+// ---- marks.jsonl, g_resets.json (gate sets) -------------------------------------------------
+// Stage B takes two things from files that are never published: the cue and step marks of its
+// layout from the "mark" lines of stamps.jsonl (analysis/gate/view.ts), and which packets with g
+// null are reset frames of G from lm of samples.jsonl (analysis/rivals/g.ts gResetSeqs). pack
+// publishes both with a gate set so that npm run replay can recompute the verdict from the set
+// alone (analysis/replay/README.md); spec 8.7 does not list them (assumption).
+
+/** Step names of the scenarios (web/scenarios): lowercase letters, digits and "_", so no prompt or pack text passes as one. */
+export const STEP_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+/** A "mark" line of stamps.jsonl, as Deck writes it (web/lib/messages.ts): a step, a cue dot, a key press. */
+export type MarkLine =
+  | { n: number; k: 'mark'; what: 'step'; name: string }
+  | { n: number; k: 'mark'; i: number; what: 'cue'; on: boolean }
+  | { n: number; k: 'mark'; what: 'key' };
+
+const markSpecs: Record<MarkLine['what'], Spec> = {
+  step: obj({
+    required: {
+      n: sampleN,
+      k: lit('mark'),
+      what: lit('step'),
+      name: str({ pattern: STEP_NAME_PATTERN, what: 'a step name of the scenario (lowercase letters, digits and _)' }),
+    },
+  }),
+  cue: obj({ required: { n: sampleN, k: lit('mark'), i: int({ min: 0 }), what: lit('cue'), on: bool } }),
+  key: obj({ required: { n: sampleN, k: lit('mark'), what: lit('key') } }),
+};
+
+/**
+ * One line of marks.jsonl: a "mark" line of stamps.jsonl with exactly the fields Deck writes on
+ * it and no other, so the file holds sample numbers, cue numbers and step names, and no text.
+ */
+export const validateMarkLine: Validator<MarkLine> = makeValidator((v, p, out) => {
+  if (isPlainObject(v) && v['k'] !== 'mark') {
+    fail(out, p === '' ? 'k' : `${p}.k`, `expected "mark", got ${describe(v['k'])}: marks.jsonl holds only the "mark" lines of stamps.jsonl`);
+    return;
+  }
+  byKind('what', markSpecs, 'mark')(v, p, out);
+});
+
+export const G_RESETS_SCHEMA = 'g-resets/1';
+
+/** The packets of stream.jsonl that stage B read as reset frames of G (spec 7.5), in ascending order. */
+export interface GResetsFile {
+  schema: typeof G_RESETS_SCHEMA;
+  seqs: number[];
+}
+
+export const validateGResets: Validator<GResetsFile> = makeValidator(
+  obj({
+    required: { schema: lit(G_RESETS_SCHEMA), seqs: arrayOf(seqN) },
+    check: (o, p, out) => {
+      const seqs = o['seqs'] as number[];
+      const at = seqs.findIndex((s, i) => i > 0 && s <= seqs[i - 1]!);
+      if (at > 0) {
+        fail(out, `${p === '' ? '' : `${p}.`}seqs[${at}]`, `expected a packet number above ${seqs[at - 1]!}: the seqs rise, each listed once, got ${seqs[at]!}`);
+      }
+    },
+  }),
+);
+
 // ---- public manifest.json ------------------------------------------------------------
 
 const LOCAL_PATH = /^(\/|~\/|[A-Za-z]:[\\/])|\/Users\/|\/home\/|\\Users\\/;
@@ -377,11 +440,11 @@ export function listDeviceNames(m: Manifest): DeviceName[] {
 
 // ---- what may be published and committed ----------------------------------------------
 
-/** Files of data/<id>/ (spec 8.7). Not every record has every file. */
+/** Files of data/<id>/ (spec 8.7, and marks.jsonl and g_resets.json for npm run replay). Not every record has every file. */
 export const PUBLISHED_FILES = [
   'manifest.json', 'stream.jsonl', 'events.jsonl', 'onsets.json', 'calib.json', 'clock_report.json',
   'receipt.json', 'receipt.txt', 'verdict.md', 'verdict.json', 'sentence_ends.json', 'planted_times.json',
-  'audio_env.json', 'plan.json',
+  'audio_env.json', 'plan.json', 'marks.jsonl', 'g_resets.json',
 ] as const;
 
 /** Published only with a switch, one session at a time (spec 8.7). */
@@ -435,8 +498,11 @@ export function whyNotInGit(path: string): string | null {
  */
 export const PUBLISHED_KINDS: readonly RecordKind[] = ['gate', 'numbers', 'spacebar', 'demo', 'headstart'];
 
-/** Files only the set of the day-1 gate has (spec 8.7). */
-export const GATE_ONLY_FILES = ['verdict.md', 'verdict.json'] as const;
+/**
+ * Files only the set of the day-1 gate has: its verdict (spec 8.7), and the marks and the reset
+ * frames of G that npm run replay recomputes the verdict with (see marks.jsonl, g_resets.json above).
+ */
+export const GATE_ONLY_FILES = ['verdict.md', 'verdict.json', 'marks.jsonl', 'g_resets.json'] as const;
 
 /** Why a record gets no published set, or null when it gets one (spec 8.7). */
 export function whyNoPublishedSet(kind: RecordKind, pack?: GatePack | null): string | null {
@@ -463,8 +529,8 @@ export interface PublishOptions {
 
 /**
  * Problems with the file names of one data/<id>/ folder (relative names, "clips/x.wav" for
- * clips). With `kind`, also whether the record gets a set at all and whether it may carry
- * verdict.md and verdict.json (only the day-1 gate, spec 8.7).
+ * clips). With `kind`, also whether the record gets a set at all and whether it may carry the
+ * files of GATE_ONLY_FILES (only the day-1 gate, spec 8.7).
  */
 export function checkPublishedNames(names: readonly string[], opts: PublishOptions = {}): string[] {
   const problems: string[] = [];
@@ -505,6 +571,8 @@ const PUBLISHED_VALIDATORS: Readonly<Record<string, { jsonl: boolean; validate: 
   'audio_env.json': { jsonl: false, validate: validateAudioEnv },
   'plan.json': { jsonl: false, validate: validateSealedPlan },
   'texts.json': { jsonl: false, validate: validateTexts },
+  'marks.jsonl': { jsonl: true, validate: validateMarkLine },
+  'g_resets.json': { jsonl: false, validate: validateGResets },
 };
 
 /** Kind and gate pack named by a manifest.json text; undefined where it does not parse or name one. */
@@ -529,7 +597,7 @@ function manifestKindAndPack(text: string | null | undefined): { kind?: RecordKi
  * Checks one data/<id>/ folder: file names, the schema of each text file, and no face
  * landmark field anywhere. `files` maps relative names to text; null for binary files.
  * Every set carries the public manifest.json; the kind and pack it names decide whether the
- * record gets a set and whether verdict.md and verdict.json belong to it (spec 8.7).
+ * record gets a set and whether the files of GATE_ONLY_FILES belong to it (spec 8.7).
  */
 export function validatePublishedFolder(
   files: Readonly<Record<string, string | null>>,
