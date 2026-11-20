@@ -235,14 +235,18 @@ describe('modes, clicks and tap lines', () => {
     const c = loopCheckClicks();
     expect(c.offsetsSamples).toEqual([500, 1_550, 2_830, 3_800, 5_120, 6_250, 7_610, 8_560, 9_870, 11_020].map((ms) => ms * 48));
     expect(c.waveform.length).toBeGreaterThan(0);
-    expect(Math.max(...c.waveform.map(Math.abs))).toBeLessThanOrEqual(0.5);
+    // Louder than the default click: Deck plays them at this level whatever the narrator level.
+    expect(Math.max(...c.waveform.map(Math.abs))).toBeLessThanOrEqual(0.9);
+    expect(Math.max(...c.waveform.map(Math.abs))).toBeGreaterThan(0.5);
   });
 
-  it('the demo take opens with three clicks at unequal gaps, the loop-check waveform (spec 7.3, 15.4)', () => {
+  it('the demo take opens with three clicks at unequal gaps, the loop-check shape at the default level (spec 7.3, 15.4)', () => {
     const d = demoClicks();
     expect(DEMO_CLICK_STARTS_MS).toEqual([250, 1_050, 2_150]);
     expect(d.offsetsSamples).toEqual([12_000, 50_400, 103_200]);
-    expect(d.waveform).toEqual(loopCheckClicks().waveform);
+    const loop = loopCheckClicks().waveform;
+    expect(d.waveform.length).toBe(loop.length);
+    for (let i = 0; i < loop.length; i++) expect(d.waveform[i]).toBeCloseTo(((loop[i] as number) * 0.5) / 0.9, 6);
     // Within the 3 s before the passage, and the gaps differ, so the video aligns one way only.
     expect((d.offsetsSamples.at(-1) as number) + d.waveform.length).toBeLessThan(3 * 48_000);
     const [a, b, c] = d.offsetsSamples as [number, number, number];

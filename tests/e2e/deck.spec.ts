@@ -425,13 +425,13 @@ test('worker path: SDK ok releases the scenario, holds come from step(), replayi
     }
     expect(events.some((e) => e.e === 'armed' && e.on === true)).toBe(true);
 
-    // Loop check A: 10 clicks at the scheduled samples, in channel 1 after the gain.
+    // Loop check A: 10 clicks at the scheduled samples, in channel 1 at their own level, not the narrator's gain.
     const clicks = loopCheckClicks();
     const clickStamps = stamps.filter((s) => s.k === 'click');
     expect(clickStamps).toEqual(clicks.offsetsSamples.map((o, i) => ({ n: (loopA.n as number) + o, k: 'click', i })));
     for (const c of clickStamps) {
       for (let j = 0; j < clicks.waveform.length; j++) {
-        expect(ch1[(c.n as number) + j]).toBe(Math.fround((clicks.waveform[j] as number) * gain));
+        expect(ch1[(c.n as number) + j]).toBe(clicks.waveform[j]);
       }
     }
     // The page gets every click, to flash the square (spec 15.4).

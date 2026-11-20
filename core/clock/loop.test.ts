@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import {
+  LOOP_AGREE_MS,
   LOOP_BLOCK_SAMPLES,
+  LOOP_CLICK_PEAK,
   LOOP_MIN_CLICKS_FOUND,
   SAMPLE_RATE_HZ,
   clickSchedule,
@@ -22,6 +24,8 @@ interface BlockOptions {
   seed?: number;
   invert?: boolean;
   missing?: number[];
+  /** Clicks that reach channel 0 at another lag (ms), as a knock that noise made look like a click. */
+  shifted?: Record<number, number>;
 }
 
 // One loop check block: the click in channel 1, through a pressed earcup into channel 0.
@@ -33,7 +37,8 @@ function loopBlock(o: BlockOptions): { ch0: Float32Array; ch1: Float32Array; sta
   starts.forEach((s, i) => {
     ch1.set(click, s);
     if (!(o.missing ?? []).includes(i)) {
-      addCoupledClick(ch0, click, s + (o.lrtMs * R) / 1000, (o.invert ? -1 : 1) * (o.gain ?? 0.3), R);
+      const lrtMs = o.shifted?.[i] ?? o.lrtMs;
+      addCoupledClick(ch0, click, s + (lrtMs * R) / 1000, (o.invert ? -1 : 1) * (o.gain ?? 0.3), R);
     }
   });
   addNoise(ch0, o.noise ?? 0.0005, mulberry32(o.seed ?? 7));
@@ -78,21 +83,50 @@ describe('measureLoopLatency (spec 6.3)', () => {
     }
   });
 
-  it('needs all 10 clicks found for an L_rt (spec 6.3 median over 10 clicks, 7.12); minFound relaxes that', () => {
-    expect(LOOP_MIN_CLICKS_FOUND).toBe(10);
+  it('needs 8 of the 10 clicks found for an L_rt (7.12); minFound changes that', () => {
+    expect(LOOP_MIN_CLICKS_FOUND).toBe(8);
     const { ch0, ch1, starts } = loopBlock({ lrtMs: 23.4, missing: [1, 4, 7] });
     const m = measureLoopLatency(ch0, ch1, starts);
     expect(m.found).toBe(7);
     expect(m.L_rt_ms).toBeNull();
+    expect(m.spread_ms).toBeNull();
     expect(m.clicks.filter((c) => !c.found).map((c) => c.i)).toEqual([1, 4, 7]);
     const relaxed = measureLoopLatency(ch0, ch1, starts, { minFound: 5 });
     expect(Math.abs(relaxed.L_rt_ms! - 23.4)).toBeLessThan(0.05);
-    // One lost click is enough to leave the check without an L_rt.
-    const one = loopBlock({ lrtMs: 23.4, missing: [6] });
-    const nine = measureLoopLatency(one.ch0, one.ch1, one.starts);
-    expect(nine.found).toBe(9);
-    expect(nine.L_rt_ms).toBeNull();
-    expect(nine.spread_ms).toBeNull();
+    // Two clicks lost to a knock still leave the check its L_rt.
+    const two = loopBlock({ lrtMs: 23.4, missing: [6, 9] });
+    const eight = measureLoopLatency(two.ch0, two.ch1, two.starts);
+    expect(eight.found).toBe(8);
+    expect(Math.abs(eight.L_rt_ms! - 23.4)).toBeLessThan(0.05);
+    expect(eight.spread_ms!).toBeLessThan(0.05);
+    expect(measureLoopLatency(two.ch0, two.ch1, two.starts, { minFound: 10 }).L_rt_ms).toBeNull();
+  });
+
+  it(`counts a click only when its lag agrees with the others within ${LOOP_AGREE_MS} ms`, () => {
+    expect(LOOP_AGREE_MS).toBe(1);
+    // Click 3 stands out of the noise but 40 ms off: not found, and the median stays put.
+    const one = loopBlock({ lrtMs: 23.4, shifted: { 3: 63.4 } });
+    const m = measureLoopLatency(one.ch0, one.ch1, one.starts);
+    expect(m.clicks[3]).toMatchObject({ found: false, lagMs: null });
+    expect(m.clicks[3]!.peakToNoise).toBeGreaterThan(10);
+    expect(m.found).toBe(9);
+    expect(Math.abs(m.L_rt_ms! - 23.4)).toBeLessThan(0.05);
+    expect(m.spread_ms!).toBeLessThan(0.05);
+    // Three such clicks leave 7 that agree: no L_rt.
+    const three = loopBlock({ lrtMs: 23.4, shifted: { 0: 5, 4: 70, 8: 90 } });
+    const n = measureLoopLatency(three.ch0, three.ch1, three.starts);
+    expect(n.found).toBe(7);
+    expect(n.L_rt_ms).toBeNull();
+    // A lag 0.5 ms off still agrees.
+    const near = loopBlock({ lrtMs: 23.4, shifted: { 2: 23.9 } });
+    expect(measureLoopLatency(near.ch0, near.ch1, near.starts).found).toBe(10);
+  });
+
+  it('plays the loop-check clicks louder than the default click', () => {
+    expect(LOOP_CLICK_PEAK).toBe(0.9);
+    const w = clickWaveform(LOOP_CLICK_PEAK);
+    expect(Math.max(...Array.from(w, Math.abs))).toBeLessThanOrEqual(LOOP_CLICK_PEAK);
+    expect(Math.max(...Array.from(w, Math.abs))).toBeGreaterThan(0.85);
   });
 
   it('does not find a lag beyond the 100 ms search', () => {

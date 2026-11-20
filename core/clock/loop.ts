@@ -16,10 +16,13 @@ export const LOOP_MAX_LAG_MS = 100;
 /** A click is found when its correlation peak stands this far above the correlation noise. */
 export const LOOP_MIN_PEAK_TO_NOISE = 10;
 /**
- * A loop check gives L_rt only when all 10 of its clicks are found: L_rt is the median over the
- * 10 clicks (spec 6.3), and doctor's hard condition is that the clicks of both checks are found (7.12).
+ * A loop check gives L_rt when at least 8 of its 10 clicks are found and agree (doctor's hard
+ * condition is that both checks are found, spec 7.12). A knock of the hand on the microphone
+ * can hide a click or two; a lag that noise made up lies far from the others and does not count.
  */
-export const LOOP_MIN_CLICKS_FOUND = CLICK_COUNT;
+export const LOOP_MIN_CLICKS_FOUND = CLICK_COUNT - 2;
+/** A found click agrees when its lag is this close to the median lag of all found clicks. */
+export const LOOP_AGREE_MS = 1;
 /** Lags this close to the peak are left out of the noise estimate (side lobes, earcup reflections). */
 const PEAK_EXCLUSION_MS = 2;
 /** Channel 1 is read from one quantum before the click stamp to one quantum after the click. */
@@ -30,6 +33,7 @@ export interface LoopOptions {
   maxLagMs?: number;
   minPeakToNoise?: number;
   minFound?: number;
+  agreeMs?: number;
 }
 
 export interface ClickLag {
@@ -41,11 +45,12 @@ export interface ClickLag {
   lagMs: number | null;
   /** |peak| / (1.4826 * median |r|) away from the peak; 0 when not computable. */
   peakToNoise: number;
+  /** The peak stands out of the noise and, in a loop check, its lag agrees with the other clicks. */
   found: boolean;
 }
 
 export interface LoopMeasurement {
-  /** Median lag of the found clicks; null when fewer than minFound (default all 10) were found. */
+  /** Median lag of the found clicks; null when fewer than minFound (default 8 of 10) were found. */
   L_rt_ms: number | null;
   /** Largest minus smallest lag of the found clicks (assumption); null with L_rt_ms. */
   spread_ms: number | null;
@@ -127,8 +132,10 @@ export function measureClickLag(
 
 /**
  * L_rt of one loop check: per-click lag of channel 0 behind channel 1, the median over the
- * found clicks, and how many were found (spec 6.3). `clickStartSamples` index the arrays;
- * a non-finite entry (for example a click inside a recording gap) counts as not found.
+ * found clicks, and how many were found (spec 6.3). A click whose peak stands out but whose lag
+ * lies more than `agreeMs` from the median of those clicks is not found. `clickStartSamples`
+ * index the arrays; a non-finite entry (for example a click inside a recording gap) counts as
+ * not found.
  */
 export function measureLoopLatency(
   ch0: Float32Array,
@@ -136,11 +143,16 @@ export function measureLoopLatency(
   clickStartSamples: readonly number[],
   opts: LoopOptions = {},
 ): LoopMeasurement {
-  const clicks: ClickLag[] = clickStartSamples.map((startSample, i) => ({
+  const heard: ClickLag[] = clickStartSamples.map((startSample, i) => ({
     i,
     startSample,
     ...measureClickLag(ch0, ch1, startSample, opts),
   }));
+  const mid = median(heard.filter((c) => c.found).map((c) => c.lagMs!));
+  const agreeMs = opts.agreeMs ?? LOOP_AGREE_MS;
+  const clicks = heard.map((c) =>
+    c.found && mid !== null && Math.abs(c.lagMs! - mid) > agreeMs ? { ...c, lagSamples: null, lagMs: null, found: false } : c,
+  );
   const lags = clicks.filter((c) => c.found).map((c) => c.lagMs!);
   const enough = lags.length > 0 && lags.length >= (opts.minFound ?? LOOP_MIN_CLICKS_FOUND);
   return {

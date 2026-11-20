@@ -126,7 +126,9 @@ export class DeckCore {
   private readonly chunkSamples: number;
   private readonly levelWindow: number;
   private readonly clickOffsets: Readonly<Record<ClickBlock, readonly number[]>>;
-  private readonly clickWave: Float32Array;
+  private readonly clickWaves: Readonly<Record<ClickBlock, Float32Array>>;
+  /** Waveform of the clicks step under way (or of the last one). */
+  private clickWave: Float32Array;
 
   /** First sample of the next quantum. */
   private nNext = 0;
@@ -193,7 +195,9 @@ export class DeckCore {
     const loop = opts.clickOffsetsSamples ? [...opts.clickOffsetsSamples].sort((a, b) => a - b) : loopCheckClicks().offsetsSamples;
     const demo = opts.demoClickOffsetsSamples ? [...opts.demoClickOffsetsSamples].sort((a, b) => a - b) : demoClicks().offsetsSamples;
     this.clickOffsets = { A: loop, B: loop, demo };
-    this.clickWave = opts.clickWaveform ?? loopCheckClicks().waveform;
+    const loopWave = opts.clickWaveform ?? loopCheckClicks().waveform;
+    this.clickWaves = { A: loopWave, B: loopWave, demo: opts.clickWaveform ?? demoClicks().waveform };
+    this.clickWave = loopWave;
     this.rec0 = new Float32Array(this.chunkSamples);
     this.rec1 = new Float32Array(this.chunkSamples);
     this.realVad = !opts.makeVad;
@@ -491,12 +495,15 @@ export class DeckCore {
       if (this.ptr < clip.pcm.length) x = (clip.pcm[this.ptr] as number) * this.envelope(t);
       this.ptr++;
     }
+    let click = 0;
     if (this.clickStart >= 0) {
       const j = t - this.clickStart;
-      if (j < this.clickWave.length) x += this.clickWave[j] as number;
+      if (j < this.clickWave.length) click = this.clickWave[j] as number;
       else this.clickStart = -1;
     }
-    return x * this.gain;
+    // Loop-check clicks keep their own level: the earpiece is off the ear, on the microphone.
+    // Demo clicks are heard in the ear, so they follow the narrator's level.
+    return this.clickBlock === 'demo' ? (x + click) * this.gain : x * this.gain + click;
   }
 
   private setState(s: NarratorState, t: number): void {
@@ -561,6 +568,7 @@ export class DeckCore {
         // scenarioProblems admitted only CLICK_BLOCKS; the demo block is not in the page's step type yet.
         const block = st.block as ClickBlock;
         this.clickBlock = block;
+        this.clickWave = this.clickWaves[block];
         this.clickAt = this.clickOffsets[block].map((o) => t + o);
         this.clickNext = 0;
         break;

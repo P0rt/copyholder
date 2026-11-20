@@ -72,7 +72,7 @@ After each session the participant labels each own objection `real_error`, `fals
 
 ## 4. Clocks, L_rt and void recordings [6.3, 7.12, 10.6]
 
-**Loop check.** With an earcup on the microphone, `Deck` plays 10 clicks at unequal intervals over about 12 s; `L_rt` is the median click shift from channel 1 to channel 0 by cross-correlation. Check A follows the SDK's `Running`, check B precedes the SDK stop, both with the camera on.
+**Loop check.** With an earcup on the microphone, `Deck` plays 10 clicks at unequal intervals over about 12 s; `L_rt` is the median click shift from channel 1 to channel 0 by cross-correlation, over the clicks whose peak stands out of the noise and whose shift lies within 1 ms of the median; a check needs at least 8 such clicks. Check A follows the SDK's `Running`, check B precedes the SDK stop, both with the camera on.
 
 | A and B differ by | Rule (`rule` in `calib.json`) |
 |---|---|

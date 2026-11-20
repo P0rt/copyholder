@@ -371,6 +371,25 @@ describe('Deck recording, meters and scenario (docs/protocol.md)', () => {
     expectSpecStamps(sim.stamps);
   });
 
+  it('loop-check clicks keep their own level under the narrator gain; demo clicks follow the gain', () => {
+    const wave = new Float32Array([0.9, -0.9]);
+    const loop = new DeckSim({ mode: 'gate', gain: 0.25, clickOffsetsSamples: [1_000], clickWaveform: wave });
+    loop.start([], [
+      { k: 'clicks', name: 'loop_a', block: 'A', text: '', lenSamples: 4_800 },
+      { k: 'end', name: 'end', text: '', lenSamples: 0 },
+    ]);
+    loop.runTo(4_000);
+    expect([loop.out[999], loop.out[1_000], loop.out[1_001], loop.out[1_002]]).toEqual([0, Math.fround(0.9), Math.fround(-0.9), 0]);
+    const demo = new DeckSim({ mode: 'live', gain: 0.25, clickWaveform: wave });
+    demo.start([], [
+      { k: 'clicks', name: 'demo_clicks', block: 'demo', text: '', lenSamples: 144_000 },
+      { k: 'end', name: 'end', text: '', lenSamples: 0 },
+    ] as unknown as Step[]);
+    demo.runTo(20_000);
+    const o = demoClicks().offsetsSamples[0] as number;
+    expect([demo.out[o], demo.out[o + 1]]).toEqual([Math.fround(0.9 * 0.25), Math.fround(-0.9 * 0.25)]);
+  });
+
   it('Stop during the clicks: no further clicks, the current click plays out, then done', () => {
     const wave = new Float32Array(240).fill(0.1);
     const sim = new DeckSim({ mode: 'live', clickOffsetsSamples: [1_000, 5_000], clickWaveform: wave });

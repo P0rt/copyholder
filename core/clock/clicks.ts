@@ -19,6 +19,14 @@ export const CLICK_END_HZ = 8_000;
 /** Default peak amplitude of the click in Deck output (before Deck's own gain, if any). */
 export const CLICK_PEAK = 0.5;
 
+/**
+ * Peak of the loop-check clicks in Deck output. Deck plays them at this level whatever the
+ * narrator level, since the earpiece is off the ear and pressed on the microphone: at the
+ * narrator's level of the first doctor runs (-9 dB) they reached the microphone about 45 dB
+ * below full scale, under the noise of the hand that held the earpiece.
+ */
+export const LOOP_CLICK_PEAK = 0.9;
+
 // Click starts in ms from the block start. All nine intervals differ (0.95-1.36 s), every one
 // is far longer than the 100 ms lag search, and 0.98 s of tail follows the last click (spec 6.3).
 const CLICK_STARTS_MS: readonly number[] = [500, 1550, 2830, 3800, 5120, 6250, 7610, 8560, 9870, 11020];
