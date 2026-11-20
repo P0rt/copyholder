@@ -56,6 +56,8 @@ export interface FolderOptions {
   planCommitment?: string | null;
   /** manifest.json dry, host's marker of tap's stand-in SDK (spec 6.5); left out by default. */
   dry?: boolean;
+  /** manifest.json tap, as host writes it ("real" for the SDK, "mock" for live/mock-tap.cjs); left out by default. */
+  tap?: 'real' | 'mock';
 }
 
 /** The seal a fixture of a sealed-plan record kind carries by default (64 hex digits). */
@@ -118,6 +120,7 @@ export function sessionManifest(data: SessionData, o: FolderOptions, hashes: Rea
     files: {},
   };
   if (o.dry !== undefined) manifest.dry = o.dry;
+  if (o.tap !== undefined) manifest.tap = o.tap;
   for (const name of Object.keys(hashes).sort()) manifest.files[name] = `sha256:${hashes[name]}`;
   return manifest;
 }

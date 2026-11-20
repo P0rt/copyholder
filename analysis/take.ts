@@ -99,6 +99,8 @@ function readTake(arg: string, env: NodeJS.ProcessEnv): StampLine[] {
   const m = parseJson(fs.readFileSync(manifestFile, 'utf8'), validateManifest, { file: SESSION_FILES.manifest });
   if (m.value === null) throw new Error(`${arg}: ${SESSION_FILES.manifest} is not valid: ${m.errors.join('; ')}`);
   if (m.value.kind !== 'headstart') throw new Error(`${arg} is a ${m.value.kind} record, not a headstart take`);
+  if (m.value.tap === 'mock') throw new Error(`${arg} ran with the mock tap, a synthetic chest trace: it is a rehearsal, not a take`);
+  if (m.value.dry === true) throw new Error(`${arg} ran with tap's stand-in SDK (dry): it is not a take`);
   const stampsFile = path.join(dir, SESSION_FILES.stamps);
   if (!fs.existsSync(stampsFile)) throw new Error(`${arg}: ${shownPath(dir)} has no ${SESSION_FILES.stamps}`);
   const parsed = parseJsonl(fs.readFileSync(stampsFile, 'utf8'), validateStampLine, { file: SESSION_FILES.stamps, maxErrors: 5 });

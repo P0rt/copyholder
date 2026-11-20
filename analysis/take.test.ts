@@ -59,9 +59,9 @@ describe('npm run take on session folders', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'take-'));
   afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
   const env = { COPYHOLDER_SESSIONS_DIR: root };
-  const write = (id: string, kind: 'headstart' | 'smoke', stamps: StampLine[]): void => {
+  const write = (id: string, kind: 'headstart' | 'smoke', stamps: StampLine[], tap?: 'real' | 'mock'): void => {
     const ch = new Float32Array(at(20));
-    writeSessionFolder(root, { sampleRateHz: FS, ch0: ch, ch1: ch, stamps: stamps as never, samples: [], events: [], micSettings: null }, { id, kind });
+    writeSessionFolder(root, { sampleRateHz: FS, ch0: ch, ch1: ch, stamps: stamps as never, samples: [], events: [], micSettings: null }, { id, kind, ...(tap === undefined ? {} : { tap }) });
   };
 
   it('checks each take in order and names the one the rule publishes', () => {
@@ -73,6 +73,15 @@ describe('npm run take on session folders', () => {
     expect(err).toEqual([]);
     expect(out).toContain('take headstart-1: 1 CHEST stop(s), 0 VOICE stop(s)');
     expect(out[out.length - 1]).toBe('published by the rule: headstart-2 (take 2 of 2, the first that qualifies)');
+  });
+
+  it('refuses a run with the mock tap: its chest trace is synthetic', () => {
+    write('headstart-7', 'headstart', [chunk, hold(10), voice(10.6, true), voice(12, false)], 'mock');
+    write('headstart-8', 'headstart', [chunk, hold(10)], 'real');
+    const err: string[] = [];
+    expect(main(['headstart-8', 'headstart-7'], env, () => {}, (l) => err.push(l))).toBe(1);
+    expect(err).toEqual(['take refused: headstart-7 ran with the mock tap, a synthetic chest trace: it is a rehearsal, not a take']);
+    expect(main(['headstart-8'], env, () => {}, () => {})).toBe(0);
   });
 
   it('refuses a folder that is not a headstart take, and a wrong command line', () => {
