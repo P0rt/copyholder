@@ -64,7 +64,7 @@ Each recording goes into its session folder `sessions/<id>/` (`COPYHOLDER_SESSIO
 The app deletes nothing by itself: files stay until you delete them.
 
 - `npm run purge -- <id> --raw` deletes only `sessions/<id>/sdk_raw.jsonl.gz`. `npm run purge -- --raw --all` does the same for every session folder.
-- `npm run purge -- <id>` deletes the whole folder `sessions/<id>/`. For the folder of a gate pack A, B or C recording or of a headstart take whose set `data/<id>/` does not exist yet, and for a folder whose `manifest.json` cannot be read or names no known kind, it refuses unless `--force` is given.
+- `npm run purge -- <id>` deletes the whole folder `sessions/<id>/`. For the folder of a gate pack A, B or C recording or of a headstart take whose set `data/<id>/` does not exist yet, and for a folder whose `manifest.json` cannot be read or names no known kind, it refuses unless `--force` is given. A run no SDK measured (a dry run or a run with `--tap mock`) gets no set, so purge deletes its folder without `--force`.
 - Without `--yes` these commands only print what they would delete.
 - They delete files on the computer only. They do not touch the published set or files already passed to the AI assistant.
 - To remove the microphone permission and the rest of the two Chrome profiles, delete the folder `~/.copyholder/`. If you used `npm run live:electron`, also delete `~/Library/Application Support/copyholder-electron`. Turn off the camera and microphone permissions of the terminal app, Chrome or Electron in System Settings > Privacy & Security > Camera and Microphone.
