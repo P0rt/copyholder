@@ -80,7 +80,7 @@ After each session the participant labels each own objection `real_error`, `fals
 | > 3 ms, ≤ 15 ms | `both`: each lead is printed with A and with B, a stop is before the voice only if it is so with both, and the recording is flagged |
 | > 15 ms | `void`: the recording's leads are invalid |
 
-Under `both`, a rule that needs one number takes the larger `L_rt` *(assumption)*, for leads and for the sniff lag's upper bound. `npm run doctor`, with two loop checks 5 minutes apart on the recording equipment, confirms or changes 3 ms and 15 ms once, before this tag: {{LRT_THRESHOLDS_CONFIRMED}}. Changed values replace these numbers here and in quickcheck condition 2 (§7.4) before the tag; the 3 ms preflight tolerance against the `doctor` value [10.4] is a separate number.
+Under `both`, a rule that needs one number takes the larger `L_rt` *(assumption)*, for leads and for the sniff lag's upper bound. `npm run doctor`, with two loop checks 5 minutes apart on the recording equipment, confirms or changes 3 ms and 15 ms once, before this tag: confirmed: 3 ms and 15 ms (L_rt A 67.8 ms, B 67.4 ms). Changed values replace these numbers here and in quickcheck condition 2 (§7.4) before the tag; the 3 ms preflight tolerance against the `doctor` value [10.4] is a separate number.
 
 **Void recordings**, the one list of hard conditions. A recording does not count if:
 
@@ -122,8 +122,8 @@ Items 1-4 are the clock check. Rule `both`, `blur`, `resize`, the share of `fram
 |---|---|
 | High-pass, hop | 150 Hz, 5 ms |
 | Voiced hop | energy ≥ noise floor + 15 dB and normalised autocorrelation ≥ periodicity threshold, on the signal decimated to 8 kHz, at lags 2.5-12.5 ms |
-| Noise floor | {{VAD_FLOOR_DB}} dB, measured by `npm run doctor` |
-| Periodicity threshold | {{VAD_PERIODICITY}} |
+| Noise floor | -65 dB, measured by `npm run doctor` |
+| Periodicity threshold | 0.7 |
 | `voice_on`, `voice_off` | 30 of the last 50 ms voiced; 1.2 s without a voiced hop |
 
 All are assumptions, frozen by this tag after `doctor` has measured the floor; `freeze-1` only repeats them. `doctor` records 10 s with three loud in-breaths; if any switched the detector on, the periodicity threshold rises from 0.5 in steps of 0.05 to the first value without `voice_on`, at most 0.7 *(assumption)*. The SDK flag `talking` is only recorded and enters no activity condition.
