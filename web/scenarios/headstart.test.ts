@@ -81,7 +81,7 @@ describe('headstart scenario (spec 6.5, 7.11, 15.1, 15.2)', () => {
     const lengths = Object.fromEntries(steps.map((s) => [s.name, s.lenSamples]));
     expect(lengths).toMatchObject({
       signal_ok: S(2),
-      loop_a_ready: S(5),
+      loop_a_ready: S(10),
       loop_a: S(12),
       headset: S(8),
       breathe_normally: S(10),
@@ -98,7 +98,7 @@ describe('headstart scenario (spec 6.5, 7.11, 15.1, 15.2)', () => {
       signal_out: S(4),
       lens_cover: S(2),
       lens_uncover: S(5),
-      loop_b_ready: S(5),
+      loop_b_ready: S(10),
       loop_b: S(12),
     });
     for (let i = 1; i <= 3; i++) {
@@ -163,20 +163,20 @@ describe('headstart scenario (spec 6.5, 7.11, 15.1, 15.2)', () => {
     const at = (name: string) => rows.find((r) => r.name === name);
     // Segment 1 starts after the SDK wait, at Signal OK.
     expect(at('signal_ok')).toMatchObject({ segment: 1, startSamples: 0 });
-    expect(at('loop_a')?.startSamples).toBe(S(7));
-    expect(at('breathe_normally')?.startSamples).toBe(S(27));
-    expect(at('deep_1_in')?.startSamples).toBe(S(37));
-    expect(at('deep_3_out')?.startSamples).toBe(S(51));
-    expect(at('rest_1')?.startSamples).toBe(S(55));
-    expect(at('opening')).toMatchObject({ segment: 1, startSamples: S(60) });
+    expect(at('loop_a')?.startSamples).toBe(S(12));
+    expect(at('breathe_normally')?.startSamples).toBe(S(32));
+    expect(at('deep_1_in')?.startSamples).toBe(S(42));
+    expect(at('deep_3_out')?.startSamples).toBe(S(56));
+    expect(at('rest_1')?.startSamples).toBe(S(60));
+    expect(at('opening')).toMatchObject({ segment: 1, startSamples: S(65) });
     // The demo clicks start where the opening ends; the first passage 3 s later.
     expect(at('demo_clicks')).toMatchObject({ segment: 2, startSamples: 0 });
     expect(at('p1')).toMatchObject({ segment: 2, startSamples: S(3) });
     expect(at('p2')).toMatchObject({ segment: 3, startSamples: 0 });
     expect(at('summary')).toMatchObject({ segment: 4, startSamples: 0 });
-    expect(at('loop_b')).toMatchObject({ segment: 4, startSamples: S(10 + 13 + 5) });
-    // Fixed parts: 60 s from Signal OK to the text, 3 s of clicks before p1 and 40 s after the text.
-    expect(at('end')).toMatchObject({ segment: 4, startSamples: S(40) });
+    expect(at('loop_b')).toMatchObject({ segment: 4, startSamples: S(10 + 13 + 10) });
+    // Fixed parts: 65 s from Signal OK to the text, 3 s of clicks before p1 and 45 s after the text.
+    expect(at('end')).toMatchObject({ segment: 4, startSamples: S(45) });
   });
 
   it('signal check without the covered lens when smoke saw an SDK error there (spec 15.2): one deep breath only', () => {
@@ -189,7 +189,7 @@ describe('headstart scenario (spec 6.5, 7.11, 15.1, 15.2)', () => {
     expect(step(noLens, 'signal_in')).toMatchObject({ k: 'prompt', text: 'Breathe in', bar: 'grow', status: 'Signal check' });
     expect(step(noLens, 'signal_out')).toMatchObject({ k: 'prompt', text: 'Breathe out', bar: 'shrink', status: 'Signal check' });
     const rows = planTimeline(noLens);
-    expect(rows.find((r) => r.name === 'loop_b')).toMatchObject({ segment: 4, startSamples: S(10 + 6 + 5) });
+    expect(rows.find((r) => r.name === 'loop_b')).toMatchObject({ segment: 4, startSamples: S(10 + 6 + 10) });
     // Everything else is the same take; the default and lensCheck true keep the lens.
     expect(noLens.filter((s) => !s.name.startsWith('lens_'))).toEqual(steps.filter((s) => !s.name.startsWith('lens_')));
     expect(buildHeadstartScenario(clips, CLIP_SAMPLES, { lensCheck: true })).toEqual(steps);
