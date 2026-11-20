@@ -43,7 +43,7 @@
 //                   line and field of each, never the path. The hash of events.jsonl in
 //                   manifest.json is then that of the file as published, with a note that says so.
 //                   Without the option such a path refuses the set; in any other file it always
-//                   does, as pack rewrites no other file.
+//                   does, as pack replaces paths in no other file.
 // --replace         writes the set again over an existing data/<id>/ (swapped in by renames).
 //
 // Ledger (spec 8.5): a gate record needs its quickcheck step. When the step order allows `pack`
