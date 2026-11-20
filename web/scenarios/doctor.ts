@@ -22,8 +22,8 @@ export const DOCTOR_TEXT = {
   leak: 'Stay silent while the sample plays again.',
   inhaleIn: 'Breathe in loudly',
   inhaleOut: 'Breathe out',
-  waitB: 'Rest with the headset on. The second loop check comes next.',
-  done: 'Doctor finished. The report is in the terminal.',
+  waitB: 'Rest with the headset on. Nothing to do until the second loop check.',
+  done: 'Recording finished. Checking it now; the result appears here shortly.',
   levelDone: 'Level saved. The report is in the terminal.',
 } as const;
 

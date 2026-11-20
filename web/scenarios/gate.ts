@@ -49,7 +49,7 @@ const FULL: GateLayout = {
 };
 
 /**
- * Pack 0 (spec 9.4), about 2.5 minutes of camera: only the path 9.4 lists. SDK start, both loop
+ * Pack 0 (spec 9.4), under 3 minutes of camera: only the path 9.4 lists. SDK start, both loop
  * checks, three deep breaths, two 'pa' (one at the start and one at the end, so the camera clock is
  * checked at both ends, spec 7.12), two sniffs, 30 s of listening and two cues. No 'Breathe normally'
  * and no rest after the sniffs; the rest before listening stays (the quiet stretch for the voice

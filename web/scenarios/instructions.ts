@@ -62,10 +62,10 @@ export const DOCTOR_INSTRUCTION: Instruction = {
       kind: 'ol',
       items: [
         'Check the device names and the microphone settings on the next screen.',
-        'Loop check: take the headset off and hold one earcup on the microphone while it clicks.',
+        'Loop check: take one earpiece off, press it onto the headset microphone (the small capsule on the cable, if there is one) and hold both still, without speaking, until the clicks stop.',
         'Put the headset on. Listen to a 20-second sample twice and choose a level.',
         'Breathe in loudly three times when asked.',
-        'Rest with the headset on. The second loop check comes five minutes after the first.',
+        'Rest with the headset on and touch nothing. The second loop check starts five minutes after the first; the screen counts down.',
       ],
     },
     { kind: 'lines', lines: ['Do not change the system volume after this check.'] },

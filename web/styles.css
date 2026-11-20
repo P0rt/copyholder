@@ -119,6 +119,14 @@ code {
   min-height: 1.5em;
 }
 
+/* "Next step in m:ss" on long quiet steps. */
+.countdown {
+  color: var(--muted);
+  font-size: 1.4rem;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
 .note.error,
 .message.error h1 {
   color: var(--bad);

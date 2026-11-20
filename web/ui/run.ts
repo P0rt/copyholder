@@ -1,7 +1,7 @@
 // The recording screen's logic: it shows what Deck reports (steps, the cue dot, states, meters) and
 // releases wait steps with {k:'go'}. It times nothing itself (spec 6.1, 7.3).
 import type { BarMotion, Step } from '../scenarios/format.ts';
-import { SAMPLE_RATE_HZ } from '../scenarios/format.ts';
+import { SAMPLE_RATE_HZ, secondsToSamples } from '../scenarios/format.ts';
 import { dbToGain } from './levels.ts';
 import type { EndReason, FailReason, FromDeck, FromWorker, TapState, ToDeck, ToWorker } from './messages.ts';
 import { causeOfState, formatStatusLine, type StopCause } from './status.ts';
@@ -19,6 +19,8 @@ export interface RunView {
   status(text: string | null): void;
   meters(ch0Db: number, ch1Db: number): void;
   recording(on: boolean): void;
+  /** "Next step in m:ss" under the prompt on long quiet steps; null hides it. */
+  countdown?(text: string | null): void;
 }
 
 export interface RunHooks {
@@ -90,6 +92,30 @@ export class FailureLatch {
   }
 }
 
+/** Shortest step that shows a countdown: shorter ones change too fast for it to help. */
+export const COUNTDOWN_MIN_SAMPLES = secondsToSamples(8);
+
+/**
+ * Sample at which a step ends, for the countdown: quiet steps where nothing else moves on the screen
+ * (rest, loop-check clicks, prompts without the breath bar) of at least COUNTDOWN_MIN_SAMPLES, and
+ * align steps, which end at their anchor's start plus the offset. Null for every other step: the
+ * narrator's own voice shows progress on play and cue steps, and wait steps have no fixed end.
+ */
+export function countdownEndN(step: Step, startN: number, starts: ReadonlyMap<string, number>): number | null {
+  if (step.k === 'align') {
+    const anchor = starts.get(step.anchor);
+    return anchor === undefined ? null : anchor + step.offsetSamples;
+  }
+  const quiet = step.k === 'rest' || step.k === 'clicks' || (step.k === 'prompt' && !step.bar);
+  return quiet && step.lenSamples >= COUNTDOWN_MIN_SAMPLES ? startN + step.lenSamples : null;
+}
+
+/** "Next step in m:ss", rounded up to the second, never below 0:00. */
+export function countdownText(samplesLeft: number): string {
+  const s = Math.max(0, Math.ceil(samplesLeft / SAMPLE_RATE_HZ));
+  return `Next step in ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
 /** The line under 'Starting camera...' while the scenario waits for the SDK signal. */
 export function sdkNote(tap: TapState, ok: boolean, note: string | undefined): string {
   if (ok) return '';
@@ -112,6 +138,10 @@ export class RunController {
   private lastClockS = 0;
   private cause: StopCause | null = null;
   private levelDb: number;
+  /** Start sample of every step so far, for align steps' countdown. */
+  private readonly stepStarts = new Map<string, number>();
+  private countdownEnd: number | null = null;
+  private countdownShown: string | null = null;
 
   constructor(
     steps: readonly Step[],
@@ -119,7 +149,7 @@ export class RunController {
     private readonly ports: RunPorts,
     private readonly hooks: RunHooks,
     startLevelDb: number,
-    /** Audio clock in seconds (AudioContext.currentTime), only to move the status-line clock between reports. */
+    /** Audio clock in seconds (AudioContext.currentTime), only to move the status-line clock and the countdown between reports. */
     private readonly audioClockS: () => number = () => 0,
   ) {
     for (const s of steps) this.byName.set(s.name, s);
@@ -160,9 +190,10 @@ export class RunController {
         this.view.bar(null, 0);
         this.view.waitButton(null);
         this.view.levels(false, this.levelDb);
+        this.setCountdown(null);
         this.finish();
         this.hooks.done(msg.n);
-        break;
+        return;
       case 'error':
         // Shown, not acted on: a scenario Deck refuses never starts, and Stop still ends the run.
         this.hooks.log?.('deck error', msg.message);
@@ -171,6 +202,19 @@ export class RunController {
       default:
         break;
     }
+    // Level reports (every 100 ms) carry no sample number: the audio clock moves the countdown between steps.
+    if (this.countdownEnd !== null && !this.ended) this.setCountdown(countdownText(this.countdownEnd - this.nowN()));
+  }
+
+  /** Deck's last sample number, moved on by the audio clock since that report. */
+  private nowN(): number {
+    return this.lastN + Math.max(0, this.audioClockS() - this.lastClockS) * SAMPLE_RATE_HZ;
+  }
+
+  private setCountdown(text: string | null): void {
+    if (text === this.countdownShown) return;
+    this.countdownShown = text;
+    this.view.countdown?.(text);
   }
 
   handleWorker(msg: FromWorker): void {
@@ -226,6 +270,9 @@ export class RunController {
     const step: Step = this.byName.get(name) ?? { k: 'prompt', name, text, lenSamples: 0 };
     this.current = step;
     this.goSent = false;
+    this.stepStarts.set(name, n);
+    this.countdownEnd = countdownEndN(step, n, this.stepStarts);
+    this.setCountdown(this.countdownEnd === null ? null : countdownText(this.countdownEnd - n));
     if (step.origin && this.originN === null) this.originN = n;
     this.view.prompt(text);
     this.view.bar(step.k === 'prompt' && step.bar ? step.bar : null, step.lenSamples / SAMPLE_RATE_HZ);
@@ -242,8 +289,7 @@ export class RunController {
       this.view.status(null);
       return;
     }
-    const nowN = this.lastN + Math.max(0, this.audioClockS() - this.lastClockS) * SAMPLE_RATE_HZ;
-    const elapsed = this.originN === null ? null : nowN - this.originN;
+    const elapsed = this.originN === null ? null : this.nowN() - this.originN;
     this.view.status(formatStatusLine(label, elapsed, this.cause));
   }
 
@@ -297,6 +343,8 @@ export class RunController {
     this.view.bar(null, 0);
     this.view.waitButton(null);
     this.view.levels(false, this.levelDb);
+    this.countdownEnd = null;
+    this.setCountdown(null);
   }
 
   /** The page turned the microphone off. */

@@ -542,7 +542,7 @@ test('gate pack A: Deck runs the minute table of spec 9.3, counted in samples', 
     ['end', 587],
   ];
   expect(table.map(([name]) => [name, at(name) - origin])).toEqual(table.map(([name, s]) => [name, S(s)]));
-  expect(at('loop_a') - at('loop_a_ready')).toBe(S(5));
+  expect(at('loop_a') - at('loop_a_ready')).toBe(S(10));
 
   // The dot fills for 1.5 s at each cue of cues.json, counted from the start of the objection block.
   const cues = t.fromDeck.filter((m) => m.k === 'cue') as Array<{ n: number; on: boolean }>;
@@ -776,11 +776,11 @@ test.describe('production build with the real Deck and the stand-in worker', () 
     await expect.poll(async () => (await standInReport(page))?.deckPortOk).toBe(true);
     await page.click('#go');
     const steps = async () => (await trace(page)).fromDeck.filter((m) => m.k === 'step') as Array<{ name: string; n: number }>;
-    // loop_a starts 5 s after loop_a_ready, counted by Deck in samples (real time here).
+    // loop_a starts 10 s after loop_a_ready, counted by Deck in samples (real time here).
     await expect.poll(async () => (await steps()).map((m) => m.name).includes('loop_a'), { timeout: 15_000 }).toBe(true);
     const n = new Map((await steps()).map((m) => [m.name, m.n]));
-    expect((n.get('loop_a') ?? 0) - (n.get('loop_a_ready') ?? 0)).toBe(S(5));
-    await expect(page.locator('#prompt')).toHaveText('Hold one earcup on the microphone');
+    expect((n.get('loop_a') ?? 0) - (n.get('loop_a_ready') ?? 0)).toBe(S(10));
+    await expect(page.locator('#prompt')).toHaveText('Press one earpiece onto the headset microphone and hold both still until the clicks stop');
     const t = await trace(page);
     expect(t.fromDeck.filter((m) => m.k === 'error')).toEqual([]);
     expect(t.processorErrors).toBe(0);
@@ -857,7 +857,7 @@ test.describe('production build with the real Deck and worker', () => {
     expect(await steps()).toEqual(['devices']);
     await page.click('#go');
     await expect.poll(steps, { timeout: 10_000 }).toEqual(['devices', 'loop_a_ready']);
-    await expect(page.locator('#prompt')).toHaveText('Hold one earcup on the microphone');
+    await expect(page.locator('#prompt')).toHaveText('Press one earpiece onto the headset microphone and hold both still until the clicks stop');
     const t = await trace(page);
     const reported = t.fromDeck.filter((m) => m.k === 'step') as Array<{ n: number }>;
     expect(reported[1]?.n).toBeGreaterThan(reported[0]?.n ?? Infinity);

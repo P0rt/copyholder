@@ -38,8 +38,8 @@ describe('gate scenario, packs A/B/C (spec 9.3)', () => {
     expect(steps.slice(0, 6).map((s) => [s.k, s.name, s.text])).toEqual([
       ['wait', 'sdk_start', 'Starting camera...'],
       ['prompt', 'signal_ok', 'Signal OK'],
-      ['prompt', 'loop_a_ready', 'Hold one earcup on the microphone'],
-      ['clicks', 'loop_a', 'Hold one earcup on the microphone'],
+      ['prompt', 'loop_a_ready', 'Press one earpiece onto the headset microphone and hold both still until the clicks stop'],
+      ['clicks', 'loop_a', 'Press one earpiece onto the headset microphone and hold both still until the clicks stop'],
       ['rest', 'headset', 'Headset on. Sit still.'],
       ['prompt', 'breathe_normally', 'Breathe normally'],
     ]);
@@ -49,7 +49,7 @@ describe('gate scenario, packs A/B/C (spec 9.3)', () => {
     expect(steps[5]).toMatchObject({ origin: true });
     expect(at(t, 'loop_a')).toBe(-S(20));
     expect(at(t, 'headset')).toBe(-S(8));
-    expect(at(t, 'signal_ok')).toBe(-S(27));
+    expect(at(t, 'signal_ok')).toBe(-S(32));
   });
 
   it('puts every block of the minute table at its time, in samples', () => {
@@ -66,8 +66,8 @@ describe('gate scenario, packs A/B/C (spec 9.3)', () => {
       ['loop_b_ready', 570],
     ];
     for (const [name, seconds] of table) expect([name, at(t, name)]).toEqual([name, S(seconds)]);
-    expect(at(t, 'loop_b')).toBe(S(575));
-    expect(at(t, 'end')).toBe(S(587));
+    expect(at(t, 'loop_b')).toBe(S(580));
+    expect(at(t, 'end')).toBe(S(592));
     expect(steps.find((s) => s.name === 'rest_1')).toMatchObject({ text: 'Rest', lenSamples: S(5) });
     expect(steps.find((s) => s.name === 'rest_2')).toMatchObject({ text: 'Rest', lenSamples: S(5) });
   });
@@ -197,7 +197,7 @@ describe('pack 0 (spec 9.4)', () => {
     expect(steps.filter((s) => s.origin).map((s) => s.name)).toEqual(['deep_1_in']);
     expect(at(t, 'headset')).toBe(-S(8));
     expect(at(t, 'loop_a')).toBe(-S(20));
-    expect(at(t, 'signal_ok')).toBe(-S(27));
+    expect(at(t, 'signal_ok')).toBe(-S(32));
   });
 
   it('runs breaths, sniffs, pa, rest, listening, objections, pa and loop check B back to back, in samples', () => {
@@ -213,25 +213,25 @@ describe('pack 0 (spec 9.4)', () => {
       ['objections', 64.8],
       ['pa_end_1_closed', 109.8],
       ['loop_b_ready', 112.8],
-      ['loop_b', 117.8],
-      ['end', 129.8],
+      ['loop_b', 122.8],
+      ['end', 134.8],
     ];
     expect(table.map(([name]) => [name, at(t, name)])).toEqual(table.map(([name, s]) => [name, S(s)]));
     expect(at(t, 'cue_1_on')).toBe(at(t, 'objections') + 18000 * 48);
     expect(at(t, 'cue_2_off')).toBe(at(t, 'objections') + 36000 * 48 + S(1.5));
   });
 
-  it('plans about 2.5 minutes of camera (spec 9.4, 11.2), a longer clip stretching its block', () => {
+  it('plans under 3 minutes of camera (spec 9.4, 11.2), a longer clip stretching its block', () => {
     const planned = (s: Step[]) => {
       const end = planTimeline(s).find((r) => r.name === 'end');
       if (end?.segment !== 1) throw new Error('end is not in the segment after the SDK wait');
       return end.startSamples;
     };
     // Camera time: the SDK wait (Running, then kOk held 5 s) and every step after it, to the end step.
-    expect(planned(steps)).toBe(S(156.8));
-    expect(S(SDK_OK_HOLD_S) + planned(steps)).toBeLessThanOrEqual(S(2.75 * 60));
+    expect(planned(steps)).toBe(S(166.8));
+    expect(S(SDK_OK_HOLD_S) + planned(steps)).toBeLessThanOrEqual(S(3 * 60));
     // The pack's own clips (about 31 s and 54 s, gate/README.md) set their blocks.
-    expect(planned(buildGateScenario('0', cues, { listen: S(31), objections: S(54) }))).toBe(S(166.8));
+    expect(planned(buildGateScenario('0', cues, { listen: S(31), objections: S(54) }))).toBe(S(176.8));
   });
 
   it('checks the two-cue list with the same rules', () => {

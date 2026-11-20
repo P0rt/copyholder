@@ -158,6 +158,7 @@ export function createPageView(doc: Document): PageView {
 
     run(opts) {
       const prompt = h(doc, 'p', { class: 'prompt', id: 'prompt' });
+      const countdown = h(doc, 'p', { class: 'countdown', id: 'countdown', hidden: true });
       const fill = h(doc, 'div', { class: 'bar-fill' });
       const bar = h(doc, 'div', { class: 'bar', id: 'bar', hidden: true }, [fill]);
       const note = h(doc, 'p', { class: 'note', id: 'note' });
@@ -180,7 +181,7 @@ export function createPageView(doc: Document): PageView {
         h(doc, 'div', { class: 'meter' }, [outMeter]),
       ]);
       const devicesBox = h(doc, 'dl', { class: 'devices', id: 'devices', hidden: true });
-      set(h(doc, 'section', { class: 'run' }, [prompt, bar, note, goButton, levels, devicesBox, meters, status]));
+      set(h(doc, 'section', { class: 'run' }, [prompt, countdown, bar, note, goButton, levels, devicesBox, meters, status]));
       runText = { prompt, note };
       dot.hidden = false;
 
@@ -213,6 +214,10 @@ export function createPageView(doc: Document): PageView {
         },
         note(text) {
           note.textContent = text;
+        },
+        countdown(text) {
+          countdown.hidden = text === null;
+          countdown.textContent = text ?? '';
         },
         waitButton(label) {
           goButton.hidden = label === null;

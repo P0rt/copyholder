@@ -141,7 +141,7 @@ describe('ScenarioRunner', () => {
       const starts = drive(steps, 0, (name) => (name === 'level_choice' ? levelWait : S(1)));
       expect(startOf(starts, 'leak') - startOf(starts, 'level_choice')).toBeGreaterThanOrEqual(levelWait);
       expect(startOf(starts, 'loop_b') - startOf(starts, 'loop_a')).toBe(S(DOCTOR_LOOP_GAP_SECONDS));
-      expect(startOf(starts, 'loop_b') - startOf(starts, 'loop_b_ready')).toBe(S(5));
+      expect(startOf(starts, 'loop_b') - startOf(starts, 'loop_b_ready')).toBe(S(10));
     }
   });
 
