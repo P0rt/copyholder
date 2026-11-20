@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="560" viewBox="0 0 1280 560" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#3e4c59"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arrowOrange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b45309"/>
+    </marker>
+    <marker id="arrowGray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8794"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="560" fill="#ffffff"/>
+
+  <!-- The Mac: everything inside runs locally -->
+  <rect x="16" y="128" width="1248" height="348" rx="14" fill="#f5f7fa" stroke="#cbd2d9" stroke-width="1.5"/>
+  <text x="34" y="154" font-size="15" fill="#616e7c" font-weight="600">On my Mac</text>
+
+  <!-- Presage, outside the Mac -->
+  <rect x="200" y="24" width="330" height="64" rx="10" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5" stroke-dasharray="6 5"/>
+  <text x="365" y="50" font-size="17" text-anchor="middle" fill="#323f4b" font-weight="600">Presage (United States)</text>
+  <text x="365" y="73" font-size="14" text-anchor="middle" fill="#616e7c">derived measurements, sent by the SDK itself</text>
+  <line x1="365" y1="186" x2="365" y2="94" stroke="#7b8794" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrowGray)"/>
+
+  <!-- Webcam -->
+  <rect x="40" y="186" width="140" height="104" rx="10" fill="#ffffff" stroke="#3e4c59" stroke-width="2"/>
+  <text x="110" y="232" font-size="19" text-anchor="middle" fill="#1f2933" font-weight="700">Webcam</text>
+  <text x="110" y="256" font-size="14" text-anchor="middle" fill="#616e7c">frames stay</text>
+  <text x="110" y="274" font-size="14" text-anchor="middle" fill="#616e7c">on the Mac</text>
+
+  <!-- SDK process -->
+  <rect x="250" y="186" width="230" height="104" rx="10" fill="#ffffff" stroke="#3e4c59" stroke-width="2"/>
+  <text x="365" y="222" font-size="19" text-anchor="middle" fill="#1f2933" font-weight="700">SDK process</text>
+  <text x="365" y="248" font-size="14" text-anchor="middle" fill="#616e7c">Node, live/tap.cjs</text>
+  <text x="365" y="268" font-size="14" text-anchor="middle" fill="#616e7c">SmartSpectra SDK 3.5.0</text>
+
+  <!-- Web Worker: the detector -->
+  <rect x="580" y="186" width="210" height="104" rx="10" fill="#eff6ff" stroke="#1d4ed8" stroke-width="2"/>
+  <text x="685" y="222" font-size="19" text-anchor="middle" fill="#1f2933" font-weight="700">Web Worker</text>
+  <text x="685" y="248" font-size="14" text-anchor="middle" fill="#1e3a8a">the detector:</text>
+  <text x="685" y="268" font-size="14" text-anchor="middle" fill="#1e3a8a">a fast rise of the trace</text>
+
+  <!-- Audio thread -->
+  <rect x="880" y="186" width="210" height="104" rx="10" fill="#ffffff" stroke="#3e4c59" stroke-width="2"/>
+  <text x="985" y="222" font-size="19" text-anchor="middle" fill="#1f2933" font-weight="700">Audio thread</text>
+  <text x="985" y="248" font-size="14" text-anchor="middle" fill="#616e7c">AudioWorklet:</text>
+  <text x="985" y="268" font-size="14" text-anchor="middle" fill="#616e7c">narrator and recorder</text>
+
+  <!-- Headset -->
+  <rect x="1150" y="186" width="100" height="104" rx="10" fill="#ffffff" stroke="#3e4c59" stroke-width="2"/>
+  <text x="1200" y="232" font-size="17" text-anchor="middle" fill="#1f2933" font-weight="700">Wired</text>
+  <text x="1200" y="254" font-size="17" text-anchor="middle" fill="#1f2933" font-weight="700">headset</text>
+
+  <!-- Webcam to SDK -->
+  <line x1="182" y1="238" x2="246" y2="238" stroke="#3e4c59" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- SDK to worker: the chest trace -->
+  <line x1="482" y1="238" x2="576" y2="238" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <text x="529" y="222" font-size="13" text-anchor="middle" fill="#1d4ed8" font-weight="600">chest trace</text>
+  <text x="529" y="260" font-size="13" text-anchor="middle" fill="#616e7c">local</text>
+  <text x="529" y="276" font-size="13" text-anchor="middle" fill="#616e7c">WebSocket</text>
+
+  <!-- Worker to audio thread: the stop -->
+  <line x1="792" y1="238" x2="876" y2="238" stroke="#1d4ed8" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <text x="834" y="222" font-size="13" text-anchor="middle" fill="#1d4ed8" font-weight="600">stop</text>
+  <text x="834" y="260" font-size="13" text-anchor="middle" fill="#616e7c">message</text>
+  <text x="834" y="276" font-size="13" text-anchor="middle" fill="#616e7c">port</text>
+
+  <!-- Audio thread to headset: the narrator -->
+  <line x1="1092" y1="214" x2="1146" y2="214" stroke="#3e4c59" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="1120" y="204" font-size="12" text-anchor="middle" fill="#3e4c59">voice</text>
+  <!-- Headset microphone to audio thread -->
+  <line x1="1148" y1="264" x2="1094" y2="264" stroke="#b45309" stroke-width="2" marker-end="url(#arrowOrange)"/>
+  <text x="1120" y="284" font-size="12" text-anchor="middle" fill="#b45309">mic</text>
+
+  <!-- Files -->
+  <line x1="365" y1="292" x2="365" y2="354" stroke="#3e4c59" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="250" y="358" width="230" height="84" rx="8" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5"/>
+  <text x="365" y="388" font-size="15" text-anchor="middle" fill="#1f2933" font-weight="600">every raw SDK message</text>
+  <text x="365" y="410" font-size="13" text-anchor="middle" fill="#616e7c">kept on the Mac,</text>
+  <text x="365" y="428" font-size="13" text-anchor="middle" fill="#616e7c">never published</text>
+
+  <line x1="985" y1="292" x2="985" y2="354" stroke="#3e4c59" stroke-width="2" marker-end="url(#arrow)"/>
+  <rect x="840" y="358" width="290" height="84" rx="8" fill="#ffffff" stroke="#9aa5b1" stroke-width="1.5"/>
+  <text x="985" y="388" font-size="15" text-anchor="middle" fill="#1f2933" font-weight="600">one audio file, two channels</text>
+  <text x="985" y="410" font-size="13" text-anchor="middle" fill="#616e7c">my microphone and the narrator,</text>
+  <text x="985" y="428" font-size="13" text-anchor="middle" fill="#616e7c">48 kHz</text>
+
+  <text x="540" y="388" font-size="14" fill="#323f4b" font-weight="600">One clock: the audio sample counter.</text>
+  <text x="540" y="410" font-size="13" fill="#616e7c">It stamps when each SDK packet arrived,</text>
+  <text x="540" y="428" font-size="13" fill="#616e7c">when the narrator went silent, when I spoke.</text>
+
+  <text x="640" y="516" font-size="14" text-anchor="middle" fill="#616e7c">From the SDK process to the 8 ms fade: no internet round trip, no timer, no work on the page's main thread.</text>
+</svg>

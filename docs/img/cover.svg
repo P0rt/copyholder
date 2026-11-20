@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="420" viewBox="0 0 1000 420" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="1000" height="420" fill="#0f172a"/>
+
+  <text x="56" y="92" font-size="58" font-weight="800" fill="#f8fafc" letter-spacing="-1">Copyholder</text>
+  <text x="58" y="136" font-size="24" fill="#cbd5e1">Can a webcam catch my in-breath before I speak?</text>
+
+  <!-- A schematic, not data: ordinary breaths, then a fast rise; the narrator goes quiet; then the voice. -->
+  <g transform="translate(0,40)">
+    <!-- narrator speech band, which stops at the dashed line -->
+    <g fill="#64748b">
+      <rect x="60" y="292" width="4" height="10" rx="2"/><rect x="70" y="288" width="4" height="18" rx="2"/><rect x="80" y="284" width="4" height="26" rx="2"/><rect x="90" y="290" width="4" height="14" rx="2"/>
+      <rect x="100" y="286" width="4" height="22" rx="2"/><rect x="110" y="282" width="4" height="30" rx="2"/><rect x="120" y="289" width="4" height="16" rx="2"/><rect x="130" y="285" width="4" height="24" rx="2"/>
+      <rect x="140" y="291" width="4" height="12" rx="2"/><rect x="150" y="283" width="4" height="28" rx="2"/><rect x="160" y="287" width="4" height="20" rx="2"/><rect x="170" y="290" width="4" height="14" rx="2"/>
+      <rect x="180" y="284" width="4" height="26" rx="2"/><rect x="190" y="288" width="4" height="18" rx="2"/><rect x="200" y="282" width="4" height="30" rx="2"/><rect x="210" y="289" width="4" height="16" rx="2"/>
+      <rect x="220" y="286" width="4" height="22" rx="2"/><rect x="230" y="291" width="4" height="12" rx="2"/><rect x="240" y="284" width="4" height="26" rx="2"/><rect x="250" y="288" width="4" height="18" rx="2"/>
+      <rect x="260" y="283" width="4" height="28" rx="2"/><rect x="270" y="290" width="4" height="14" rx="2"/><rect x="280" y="285" width="4" height="24" rx="2"/><rect x="290" y="287" width="4" height="20" rx="2"/>
+      <rect x="300" y="282" width="4" height="30" rx="2"/><rect x="310" y="289" width="4" height="16" rx="2"/><rect x="320" y="286" width="4" height="22" rx="2"/><rect x="330" y="291" width="4" height="12" rx="2"/>
+      <rect x="340" y="284" width="4" height="26" rx="2"/><rect x="350" y="288" width="4" height="18" rx="2"/><rect x="360" y="283" width="4" height="28" rx="2"/><rect x="370" y="290" width="4" height="14" rx="2"/>
+      <rect x="380" y="285" width="4" height="24" rx="2"/><rect x="390" y="287" width="4" height="20" rx="2"/><rect x="400" y="282" width="4" height="30" rx="2"/><rect x="410" y="289" width="4" height="16" rx="2"/>
+      <rect x="420" y="286" width="4" height="22" rx="2"/><rect x="430" y="291" width="4" height="12" rx="2"/><rect x="440" y="284" width="4" height="26" rx="2"/><rect x="450" y="288" width="4" height="18" rx="2"/>
+      <rect x="460" y="283" width="4" height="28" rx="2"/><rect x="470" y="290" width="4" height="14" rx="2"/><rect x="480" y="285" width="4" height="24" rx="2"/><rect x="490" y="287" width="4" height="20" rx="2"/>
+      <rect x="500" y="282" width="4" height="30" rx="2"/><rect x="510" y="289" width="4" height="16" rx="2"/><rect x="520" y="286" width="4" height="22" rx="2"/><rect x="530" y="291" width="4" height="12" rx="2"/>
+      <rect x="540" y="284" width="4" height="26" rx="2"/><rect x="550" y="288" width="4" height="18" rx="2"/><rect x="560" y="283" width="4" height="28" rx="2"/><rect x="570" y="290" width="4" height="14" rx="2"/>
+      <rect x="580" y="285" width="4" height="24" rx="2"/><rect x="590" y="287" width="4" height="20" rx="2"/><rect x="600" y="282" width="4" height="30" rx="2"/><rect x="610" y="289" width="4" height="16" rx="2"/>
+      <rect x="620" y="286" width="4" height="22" rx="2"/><rect x="630" y="289" width="4" height="16" rx="2"/><rect x="640" y="293" width="4" height="8" rx="2"/>
+      
+    </g>
+    <text x="60" y="336" font-size="16" fill="#94a3b8">the narrator reads</text>
+
+    <!-- my voice, after the stop -->
+    <g fill="#f59e0b">
+      <rect x="790" y="286" width="4" height="22" rx="2"/><rect x="800" y="278" width="4" height="38" rx="2"/><rect x="810" y="282" width="4" height="30" rx="2"/><rect x="820" y="274" width="4" height="46" rx="2"/>
+      <rect x="830" y="280" width="4" height="34" rx="2"/><rect x="840" y="276" width="4" height="42" rx="2"/><rect x="850" y="284" width="4" height="26" rx="2"/><rect x="860" y="278" width="4" height="38" rx="2"/>
+      <rect x="870" y="282" width="4" height="30" rx="2"/><rect x="880" y="286" width="4" height="22" rx="2"/><rect x="890" y="280" width="4" height="34" rx="2"/><rect x="900" y="288" width="4" height="18" rx="2"/>
+      <rect x="910" y="291" width="4" height="12" rx="2"/>
+    </g>
+    <text x="790" y="336" font-size="16" fill="#fbbf24">my voice</text>
+
+    <!-- the chest trace: three ordinary breaths, then a fast rise -->
+    <path d="M60,214 C90,190 120,190 150,214 S210,238 240,214 S300,190 330,214 S390,238 420,214 S480,190 510,214 S570,238 600,224 C625,214 640,200 655,168 C664,150 672,140 690,136 C720,132 760,140 800,150 C840,160 880,168 940,172"
+          fill="none" stroke="#38bdf8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="60" y="176" font-size="16" fill="#7dd3fc">my chest, read by the webcam</text>
+
+    <!-- the stop -->
+    <line x1="650" y1="120" x2="650" y2="320" stroke="#e2e8f0" stroke-width="2" stroke-dasharray="7 6"/>
+    <text x="660" y="128" font-size="16" fill="#e2e8f0" font-weight="700">quiet</text>
+  </g>
+</svg>
