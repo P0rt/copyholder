@@ -7,6 +7,7 @@ import type { GatePack } from '../../core/schemas/index.ts';
 import type { SpanSamples } from '../rivals/index.ts';
 import { objectionBlockEnd } from '../lib/conditions.ts';
 import { cueStarts } from '../lib/measure.ts';
+import { rehearsalRefusal } from '../lib/rehearsal.ts';
 import { recordedRange, stepStart, type LoadedSession } from '../lib/session.ts';
 import { gateSteps, type GateSteps } from '../lib/steps.ts';
 import { GateRefusal } from './common.ts';
@@ -22,12 +23,21 @@ export interface GateLayout {
   scored: SpanSamples;
 }
 
-/** Pack of a gate recording; refuses other records and the short probe (spec 9.4). */
-export function gatePackOfSession(s: Pick<LoadedSession, 'kind' | 'manifest'>): Exclude<GatePack, '0'> {
+/**
+ * Pack of a gate recording; refuses other records, the short probe (spec 9.4) and a run that no
+ * SDK measured: the mock tap, tap's stand-in SDK or no SDK make it a rehearsal (PREREG.md section 11).
+ * retune and confirm reach it through gateLayout, so the rehearsal refusal names no command.
+ */
+export function gatePackOfSession(s: Pick<LoadedSession, 'kind' | 'manifest' | 'dir' | 'stamps'>): Exclude<GatePack, '0'> {
   if (s.kind !== 'gate') throw new GateRefusal(`analyze:gate reads day-one gate recordings; this one is a ${s.kind} record`);
   const pack = s.manifest.pack;
-  if (pack === 'A' || pack === 'B' || pack === 'C') return pack;
-  throw new GateRefusal(`analyze:gate needs a full pack (A, B or C); this recording has pack ${String(pack)} (the probe is not scored, spec 9.4)`);
+  if (pack !== 'A' && pack !== 'B' && pack !== 'C') {
+    throw new GateRefusal(`analyze:gate needs a full pack (A, B or C); this recording has pack ${String(pack)} (the probe is not scored, spec 9.4)`);
+  }
+  // Reads the step mark of the objection block only, which stage A may read (cutOf).
+  const rehearsal = rehearsalRefusal(s, pack);
+  if (rehearsal !== null) throw new GateRefusal(rehearsal);
+  return pack;
 }
 
 /** Step marks only: the part of the layout stage A may read (all marks at or before the cut). */

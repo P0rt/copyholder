@@ -22,6 +22,7 @@ import { measureLoops, packetEnvelope, sampleToCameraUs, type LoopPair } from '.
 import { SessionLoadError, loadSession, stepSpan, type LoadedSession } from './lib/session.ts';
 import { gateSteps } from './lib/steps.ts';
 import { encodeStereoFloatWav, readStereoFloatWav } from './lib/wav.ts';
+import { nextRecordingAdvice } from './gate/inputs.ts';
 import {
   EXIT_GOOD,
   EXIT_RERECORD,
@@ -59,6 +60,17 @@ const PACKA: SyntheticOptions = { scenario: 'gate', replies: 14, narrationS: 74,
 const PROBE_TECHNICAL = '[technical failure; fix it and repeat the short probe until it gives GOOD RECORDING (spec 9.4)]';
 const PROBE_NOT_TECHNICAL = '[not technical; the probe spends no pack: repeat the short probe until it gives GOOD RECORDING (spec 9.4)]';
 
+/** The stdout line before the verdict of a gate run with the mock tap (PREREG.md section 11), up to what comes next. */
+const MOCK_REHEARSAL =
+  'This run is a rehearsal, not data: manifest.json says tap: "mock" (the mock tap made up the chest trace), so no SDK measured the chest, and clocks, label and analyze:gate refuse it (PREREG.md section 11).';
+
+/** What comes next for a mock run of pack A, B or C that played the planted errors (PREREG.md section 7.1). */
+const keepFolder = (pack: string): string =>
+  `It played the planted errors of pack ${pack} (its objection block, from 4:15, began), and the participant does not hear a pack before it is recorded (PREREG.md section 7.1): keep this folder as the record of that, and do not record pack ${pack} with a participant who heard this run.`;
+
+/** An SDK error line as host writes it into events.jsonl (live/host.cjs onSdkError). */
+const sdkErrorEvent = (code: number, name: string) => ({ n: null, e: 'sdk_error', by: 'host', code, name, message: 'The SDK stopped.' });
+
 interface Recorded {
   run: QuickcheckRun;
   /** stdout: exactly the verdict line. */
@@ -72,7 +84,7 @@ interface Recorded {
 async function record(
   id: string,
   synth: SyntheticOptions,
-  folder: { kind?: RecordKind; pack?: GatePack | null; headerDataBytes?: number } = {},
+  folder: { kind?: RecordKind; pack?: GatePack | null; headerDataBytes?: number; tap?: 'real' | 'mock' } = {},
   mutate?: (s: ReturnType<typeof makeSyntheticSession>) => void,
   over: Partial<QuickcheckDeps> = {},
 ): Promise<Recorded> {
@@ -84,6 +96,7 @@ async function record(
     kind,
     pack: kind === 'gate' ? (folder.pack ?? '0') : null,
     ...(folder.headerDataBytes === undefined ? {} : { headerDataBytes: folder.headerDataBytes }),
+    ...(folder.tap === undefined ? {} : { tap: folder.tap }),
   });
   const session = loadSession(dir, { env: env() });
   const out: string[] = [];
@@ -159,6 +172,117 @@ describe('quickcheck on a gate recording', () => {
     expect(step.utc).toBe('2026-11-13T18:20:00Z');
     expect(step.out_sha256['quickcheck.json']).toBe(sha256Hex(fs.readFileSync(path.join(r.dir, 'quickcheck.json'))));
     fs.rmSync(r.dir, { recursive: true, force: true });
+  });
+
+  // PREREG.md section 11: no SDK measured the chest of a mock-tap run, so it is a rehearsal. host
+  // and the page read the last stdout line as the verdict, which stays as it is; the line before it
+  // says what to do with the folder (section 7.1 for a run that played the planted errors).
+  it('a gate run with the mock tap keeps its verdict, and one stdout line before it says it is a rehearsal and what comes next', async () => {
+    const r = await record('gate-a-mock', PACKA, { pack: 'A', tap: 'mock' });
+    expect(r.run.code).toBe(EXIT_GOOD);
+    expect(r.out).toEqual([`${MOCK_REHEARSAL} ${keepFolder('A')}`, 'GOOD RECORDING']);
+    expect(r.run.lines).toEqual(r.out);
+    expect(r.log.some((l) => l.startsWith(MOCK_REHEARSAL))).toBe(false);
+    expect(quickcheckJson(r.dir).result).toBe('GOOD RECORDING');
+    expect(ledgerLinesOf(r.dir).map((l) => (JSON.parse(l) as { step: string }).step)).toEqual(['record', 'quickcheck']);
+    fs.rmSync(r.dir, { recursive: true, force: true });
+
+    // The probe, failed: still one verdict line, the last, with the probe's own words (spec 9.4).
+    const probe = await record('gate-0-mock', { ...PACK0, faults: { sdkError: true } }, { tap: 'mock' });
+    expect(probe.run.code).toBe(EXIT_RERECORD);
+    expect(probe.out).toHaveLength(2);
+    expect(probe.out[0]).toBe(
+      `${MOCK_REHEARSAL} Delete it with npm run purge -- gate-0-mock --yes, and record the probe with the real tap (npm run gate -- --pack 0, without --tap mock).`,
+    );
+    expect(probe.out.filter((l) => /^(GOOD RECORDING|RE-RECORD NOW: .*)$/.test(l))).toEqual([last(probe.out)]);
+    expect(last(probe.out).startsWith('RE-RECORD NOW: the SDK reported 1 error(s) (code 5 kNetworkError)')).toBe(true);
+    expect(last(probe.out).endsWith(` ${PROBE_TECHNICAL}`)).toBe(true);
+    fs.rmSync(probe.dir, { recursive: true, force: true });
+
+    // The real tap gets no such line.
+    const real = await record('gate-a-real', PACKA, { pack: 'A', tap: 'real' });
+    expect(real.out).toEqual(['GOOD RECORDING']);
+    fs.rmSync(real.dir, { recursive: true, force: true });
+  });
+
+  // A failed run of pack A, B or C that no SDK measured is no recording of the pack: none of what
+  // spec 9.4 and PREREG.md section 11 say about a failed recording (recorded again, lost, kept in the
+  // pooled numbers, the next unused pack) applies, and analyze:gate refuses it in the same words.
+  describe('a failed rehearsal of pack A, B or C (PREREG.md sections 7.1 and 11)', () => {
+    /** Three replies quieted, so condition 6 alone fails: voice after 11 of 14 cues. */
+    const elevenReplies = (s: ReturnType<typeof makeSyntheticSession>): void => {
+      const ch0 = s.session.ch0;
+      s.truth.voiceOnsets.slice(0, 3).forEach((n, i) => {
+        ch0.fill(0, n - 2400, n + Math.round(1.2 * 48_000));
+        addNoise(ch0, 0.0005, mulberry32(100 + i), n - 2400, n + Math.round(1.2 * 48_000));
+      });
+    };
+    /** The objection block never began: its step mark is gone from stamps.jsonl. */
+    const brokeOff = (s: ReturnType<typeof makeSyntheticSession>): void => {
+      const objections = gateSteps('A').objections;
+      s.session.stamps = s.session.stamps.filter((st) => !(st.k === 'mark' && st.what === 'step' && st.name === objections));
+    };
+    const expectNoFailedRecordingWords = (r: Recorded): void => {
+      for (const l of [...r.out, ...r.log]) expect(l).not.toMatch(/lost|not recorded again|cannot be recorded again|next unused pack|pooled numbers|re-record is free|confirm/);
+    };
+    const words = (pack: string): string =>
+      `[rehearsal, not a recording of pack ${pack}: it does not count, and the rules for a failed recording of pack ${pack} do not apply (PREREG.md section 11)]`;
+    const advice = (pack: string): string =>
+      `This run is a rehearsal, not a recording of pack ${pack}, so what PREREG.md sections 7.4 and 11 say about a failed recording of pack ${pack} does not apply to it.`;
+
+    it('pack B with fewer than 12 replies: not kept in the pooled numbers, and the folder is kept as the record of what was played', async () => {
+      const r = await record('mock-few-b', PACKA, { pack: 'B', tap: 'mock' }, elevenReplies);
+      expect(r.run.code).toBe(EXIT_RERECORD);
+      expect(quickcheckJson(r.dir).technical).toBe(false);
+      expect(r.out).toEqual([
+        `${MOCK_REHEARSAL} ${keepFolder('B')}`,
+        `RE-RECORD NOW: a voice was found within 10 s after only 11 of 14 cues (needs 12) ${words('B')}`,
+      ]);
+      expect(r.log).toContain(`${advice('B')} ${keepFolder('B')}`);
+      expectNoFailedRecordingWords(r);
+      fs.rmSync(r.dir, { recursive: true, force: true });
+    });
+
+    it('pack C, a technical failure after 4:15: not lost, and the numbers do not fall back to pack B alone', async () => {
+      const r = await record('mock-fail-c', { ...PACKA, faults: { sdkError: true } }, { pack: 'C', tap: 'mock' });
+      expect(r.run.code).toBe(EXIT_RERECORD);
+      expect(quickcheckJson(r.dir).technical).toBe(true);
+      expect(r.out).toEqual([`${MOCK_REHEARSAL} ${keepFolder('C')}`, `RE-RECORD NOW: the SDK reported 1 error(s) (code 5 kNetworkError) ${words('C')}`]);
+      expect(r.log).toContain(`${advice('C')} ${keepFolder('C')}`);
+      expect([...r.out, ...r.log].join('\n')).not.toMatch(/pack B alone/);
+      expectNoFailedRecordingWords(r);
+      fs.rmSync(r.dir, { recursive: true, force: true });
+    });
+
+    it('pack A, a technical failure after 4:15 and one before it: the same pack stays to be recorded, with the real tap', async () => {
+      const after = await record('mock-fail-a', { ...PACKA, faults: { sdkError: true } }, { pack: 'A', tap: 'mock' });
+      expect(last(after.out)).toBe(`RE-RECORD NOW: the SDK reported 1 error(s) (code 5 kNetworkError) ${words('A')}`);
+      expect(after.log).toContain(`${advice('A')} ${keepFolder('A')}`);
+      expectNoFailedRecordingWords(after);
+      fs.rmSync(after.dir, { recursive: true, force: true });
+
+      // Before 4:15 no planted error was played: the folder is deleted and pack A recorded with the real tap.
+      const before = await record('mock-early-a', { ...PACKA, faults: { sdkError: true } }, { pack: 'A', tap: 'mock' }, brokeOff);
+      const next =
+        'It stopped before the objection block (4:15), so it played no planted error of pack A: delete it with npm run purge -- mock-early-a --yes, and record pack A with the real tap (npm run gate -- --pack A, without --tap mock).';
+      expect(before.out[0]).toBe(`${MOCK_REHEARSAL} ${next}`);
+      expect(last(before.out)).toMatch(new RegExp(` ${words('A').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`));
+      expect(before.log).toContain(`${advice('A')} ${next}`);
+      expect(before.out.filter((l) => /^(GOOD RECORDING|RE-RECORD NOW: .*)$/.test(l))).toEqual([last(before.out)]);
+      expectNoFailedRecordingWords(before);
+      fs.rmSync(before.dir, { recursive: true, force: true });
+    });
+
+    it('a mock kCreditExhausted spends no SDK credit: the run is a rehearsal, not a lost pack', async () => {
+      const credit = (s: ReturnType<typeof makeSyntheticSession>): void => {
+        (s.session.events as object[]).push(sdkErrorEvent(4, 'kCreditExhausted'));
+      };
+      const r = await record('mock-credit-b', PACKA, { pack: 'B', tap: 'mock' }, credit);
+      expect(last(r.out)).toBe(`RE-RECORD NOW: the SDK reported 1 error(s) (code 4 kCreditExhausted) ${words('B')}`);
+      expect([...r.out, ...r.log].join('\n')).not.toMatch(/credits are used up/);
+      expectNoFailedRecordingWords(r);
+      fs.rmSync(r.dir, { recursive: true, force: true });
+    });
   });
 
   it('a clean pack-0 recording passes; a re-run appends again, but not after clocks, and then keeps quickcheck.json', async () => {
@@ -311,7 +435,9 @@ describe('pack A counts and failure order, in memory (spec 9.4)', () => {
       'RE-RECORD NOW: a voice was found within 10 s after only 11 of 14 cues (needs 12) [not technical: the next recording is the one content re-record (spec 9.6)]',
     );
     expect(eleven.quickcheck.technical).toBe(false);
-    expect(eleven.report).toContain('The objection block was heard: record the next unused pack, B, then C (spec 9.4).');
+    expect(eleven.report).toContain(
+      'quickcheck marks the failure as not technical (fewer than 12 replies, spec 9.4): record the next unused pack (B, then C), which is the one re-record for content (spec 9.6).',
+    );
   });
 
   it("'pa' bursts: 4 of 5 in a block pass, 3 of 5 fail", () => {
@@ -369,6 +495,100 @@ describe('pack A counts and failure order, in memory (spec 9.4)', () => {
 
     const computed = evalA({ ch0, events }, { detectorComputed: true });
     expect(computed.line.endsWith('[technical failure, but a detector was already computed, so it uses up the one re-record (spec 9.4)]')).toBe(true);
+  });
+
+  // PREREG.md §7.4 for pack A and section 11 for packs B and C: what comes after a technical
+  // failure depends on the pack, on whether the objection block (4:15) began, and on whether the
+  // SDK ended the recording with kCreditExhausted. The report line is analyze:gate's advice.
+  describe('what comes next, by pack (PREREG.md section 11)', () => {
+    const objections = gateSteps('A').objections;
+    const brokeOff = (): LoadedSession['stamps'] => base.stamps.filter((st) => !(st.k === 'mark' && st.what === 'step' && st.name === objections));
+    const failed = (pack: 'A' | 'B' | 'C', o: { reached: boolean; credits?: boolean }) => {
+      const error = o.credits === true ? sdkErrorEvent(4, 'kCreditExhausted') : sdkErrorEvent(5, 'kError');
+      const r = evaluateQuickcheck({ ...base, stamps: o.reached ? base.stamps : brokeOff(), events: [...base.events, error] }, { set: 'gate', pack }, { loops });
+      expect(r.quickcheck.technical).toBe(true);
+      expect(r.quickcheck.reasons[0]).toBe(o.credits === true ? 'the SDK reported 1 error(s) (code 4 kCreditExhausted)' : 'the SDK reported 1 error(s) (code 5 kError)');
+      return { bracket: /\[([^\]]*)\]$/.exec(r.line)?.[1], advice: r.report[r.report.length - 1] };
+    };
+    const advice = (pack: 'A' | 'B' | 'C', reached: boolean, creditsUsedUp = false): string =>
+      nextRecordingAdvice({ technical: true, pack, objectionsReached: reached, detectorComputed: false, creditsUsedUp });
+
+    it('pack A: the same pack before 4:15, the next unused pack after it (spec 9.4)', () => {
+      const before = failed('A', { reached: false });
+      expect(before.bracket).toBe('technical failure; this re-record is free (spec 9.4)');
+      expect(before.advice).toBe(
+        'The failure is technical. Remove the cause, repeat pack 0 until it says GOOD RECORDING, then record pack A again: the recording broke off before the objection block (4:15), so its errors were not heard (spec 9.4). A technical failure with no detector computed does not spend the one re-record for content (spec 9.4).',
+      );
+      const after = failed('A', { reached: true });
+      expect(after.bracket).toBe('technical failure; this re-record is free (spec 9.4)');
+      expect(after.advice).toBe(advice('A', true));
+      expect(after.advice).toMatch(/then record the next unused pack \(B, then C\): the objection block \(from 4:15\) was heard, so pack A cannot be recorded again \(spec 9\.4\)\./);
+    });
+
+    it('pack B: recorded again before 4:15; lost and not replaced after it, then one demo take and pack C', () => {
+      const before = failed('B', { reached: false });
+      expect(before.bracket).toBe('technical failure before 4:15: pack B is recorded again (PREREG.md section 11)');
+      expect(before.advice).toBe(
+        'The failure is technical. Remove the cause, repeat pack 0 until it says GOOD RECORDING, then record pack B again: the recording broke off before the objection block (4:15), so its errors were not heard (PREREG.md section 11).',
+      );
+      expect(before.advice).toBe(advice('B', false));
+      const after = failed('B', { reached: true });
+      expect(after.bracket).toBe('technical failure after 4:15: pack B is lost and not replaced; next come one demo take and pack C (PREREG.md section 11)');
+      expect(after.advice).toBe(
+        'The failure is technical, but the objection block (from 4:15) was heard, so pack B is lost, reported with its reason and not replaced (PREREG.md section 11). Go on in the order of section 11, with one demo take, then pack C; npm run confirm -- <idB> <idC> takes this recording as <idB> and reports it as lost.',
+      );
+      expect(after.advice).toBe(advice('B', true));
+      expect(`${before.advice} ${after.advice}`).not.toMatch(/re-record|next unused pack/);
+    });
+
+    it('pack C: recorded again before 4:15; lost after it, and the numbers are those of pack B alone', () => {
+      const before = failed('C', { reached: false });
+      expect(before.bracket).toBe('technical failure before 4:15: pack C is recorded again (PREREG.md section 11)');
+      expect(before.advice).toBe(advice('C', false));
+      expect(before.advice).toMatch(/then record pack C again: the recording broke off before the objection block \(4:15\)/);
+      const after = failed('C', { reached: true });
+      expect(after.bracket).toBe('technical failure after 4:15: pack C is lost and not replaced; the confirmatory numbers are those of pack B alone, flagged (PREREG.md section 11)');
+      expect(after.advice).toBe(
+        'The failure is technical, but the objection block (from 4:15) was heard, so pack C is lost, reported with its reason and not replaced (PREREG.md section 11). The confirmatory numbers are those of pack B alone, flagged: npm run confirm -- <idB> <idC> takes this recording as <idC> and reports it as lost.',
+      );
+      expect(after.advice).toBe(advice('C', true));
+    });
+
+    it('kCreditExhausted loses the recording on every pack, before 4:15 too, and it is never a free re-record', () => {
+      for (const pack of ['A', 'B', 'C'] as const) {
+        for (const reached of [false, true]) {
+          const r = failed(pack, { reached, credits: true });
+          expect(r.bracket).toBe(
+            `the SDK credits are used up (kCreditExhausted): pack ${pack} is lost and not replaced${pack === 'C' ? '; the confirmatory numbers are those of pack B alone, flagged' : ''} (PREREG.md section 11)`,
+          );
+          expect(r.advice).toBe(advice(pack, reached, true));
+          expect(r.advice).toMatch(new RegExp(`^The SDK ended the recording with kCreditExhausted, so its credits are used up: pack ${pack} is lost, reported with its reason and not replaced \\(PREREG\\.md section 11\\)\\. `));
+          expect(`${r.bracket} ${r.advice}`).not.toMatch(/free|record pack [ABC] again|next unused pack/);
+        }
+      }
+      expect(failed('C', { reached: false, credits: true }).advice).toBe(
+        'The SDK ended the recording with kCreditExhausted, so its credits are used up: pack C is lost, reported with its reason and not replaced (PREREG.md section 11). The confirmatory numbers are those of pack B alone, flagged: npm run confirm -- <idB> <idC> takes this recording as <idC> and reports it as lost.',
+      );
+      expect(failed('B', { reached: true, credits: true }).advice).toBe(
+        'The SDK ended the recording with kCreditExhausted, so its credits are used up: pack B is lost, reported with its reason and not replaced (PREREG.md section 11). The demo take and pack C need credits too, so neither can start until the SDK has credits again; without pack C there are no confirmatory numbers, and npm run confirm -- <idB> reports this recording as lost.',
+      );
+      expect(failed('A', { reached: false, credits: true }).advice).toBe(
+        'The SDK ended the recording with kCreditExhausted, so its credits are used up: pack A is lost, reported with its reason and not replaced (PREREG.md section 11). Packs B, then C need credits too, so none can be recorded until the SDK has credits again.',
+      );
+    });
+
+    it('reads the credit loss by the code or by the name alone, as npm run confirm does', () => {
+      const byName = { n: null, e: 'sdk_error', by: 'host', code: null, name: 'kCreditExhausted', message: '' };
+      const r = evaluateQuickcheck({ ...base, events: [...base.events, byName] }, { set: 'gate', pack: 'B' }, { loops });
+      expect(r.line).toMatch(/\[the SDK credits are used up \(kCreditExhausted\): pack B is lost and not replaced \(PREREG\.md section 11\)\]$/);
+      // The probe: nothing can follow until the SDK has credits again.
+      const probe = evaluateQuickcheck({ ...base, events: [...base.events, sdkErrorEvent(4, 'kCreditExhausted')] }, { set: 'gate', pack: '0' }, { loops });
+      expect(probe.line.endsWith('[the SDK credits are used up (kCreditExhausted): nothing can be recorded until the SDK has credits again (PREREG.md section 11)]')).toBe(true);
+      expect(probe.report).toContain(
+        'The SDK ended the probe with kCreditExhausted, so its credits are used up: neither the probe nor a pack can be recorded until the SDK has credits again (PREREG.md section 11).',
+      );
+      expect(probe.report).not.toContain('Fix the cause and repeat the probe (npm run gate -- --pack 0) until it gives GOOD RECORDING (spec 9.4).');
+    });
   });
 });
 
@@ -674,15 +894,35 @@ describe("dry runs: tap's stand-in SDK (spec 6.5)", () => {
 });
 
 describe('verdict words and the ledger (spec 8.5, 9.4, 9.6, 10.6)', () => {
-  it('names what a failure costs', () => {
+  it('names what a failure costs, by pack (spec 9.4, PREREG.md section 11)', () => {
     const zero = { set: 'gate', pack: '0' } as const;
+    const a = { set: 'gate', pack: 'A' } as const;
     const b = { set: 'gate', pack: 'B' } as const;
-    expect(technicalWords(zero, true, true)).toBe('technical failure; fix it and repeat the short probe until it gives GOOD RECORDING (spec 9.4)');
-    expect(technicalWords(zero, false, false)).toBe('not technical; the probe spends no pack: repeat the short probe until it gives GOOD RECORDING (spec 9.4)');
-    expect(technicalWords(b, false, false)).toBe('not technical: the next recording is the one content re-record (spec 9.6)');
-    expect(technicalWords(b, true, false)).toBe('technical failure; this re-record is free (spec 9.4)');
-    expect(technicalWords(b, true, true)).toBe('technical failure, but a detector was already computed, so it uses up the one re-record (spec 9.4)');
-    expect(technicalWords({ set: 'session', d1: true }, true, false)).toBe('technical failure; spec 10.6 decides on a replacement');
+    const c = { set: 'gate', pack: 'C' } as const;
+    const before = { objectionsReached: false, creditsUsedUp: false };
+    const after = { objectionsReached: true, creditsUsedUp: false };
+    const credits = { objectionsReached: false, creditsUsedUp: true };
+    expect(technicalWords(zero, true, true, before)).toBe('technical failure; fix it and repeat the short probe until it gives GOOD RECORDING (spec 9.4)');
+    expect(technicalWords(zero, false, false, before)).toBe('not technical; the probe spends no pack: repeat the short probe until it gives GOOD RECORDING (spec 9.4)');
+    expect(technicalWords(zero, true, false, credits)).toBe('the SDK credits are used up (kCreditExhausted): nothing can be recorded until the SDK has credits again (PREREG.md section 11)');
+    // Pack A: spec 9.4, as section 11 says.
+    expect(technicalWords(a, false, false, after)).toBe('not technical: the next recording is the one content re-record (spec 9.6)');
+    expect(technicalWords(a, true, false, after)).toBe('technical failure; this re-record is free (spec 9.4)');
+    expect(technicalWords(a, true, true, before)).toBe('technical failure, but a detector was already computed, so it uses up the one re-record (spec 9.4)');
+    expect(technicalWords(a, true, false, credits)).toBe('the SDK credits are used up (kCreditExhausted): pack A is lost and not replaced (PREREG.md section 11)');
+    // Packs B and C: section 11.
+    expect(technicalWords(b, false, false, after)).toBe('not technical: pack B is not recorded again and stays in the pooled numbers, flagged (PREREG.md section 11)');
+    expect(technicalWords(c, false, false, before)).toBe('not technical: pack C is not recorded again and stays in the pooled numbers, flagged (PREREG.md section 11)');
+    expect(technicalWords(b, true, false, before)).toBe('technical failure before 4:15: pack B is recorded again (PREREG.md section 11)');
+    expect(technicalWords(b, true, true, after)).toBe('technical failure after 4:15: pack B is lost and not replaced; next come one demo take and pack C (PREREG.md section 11)');
+    expect(technicalWords(c, true, false, after)).toBe(
+      'technical failure after 4:15: pack C is lost and not replaced; the confirmatory numbers are those of pack B alone, flagged (PREREG.md section 11)',
+    );
+    expect(technicalWords(b, true, false, credits)).toBe('the SDK credits are used up (kCreditExhausted): pack B is lost and not replaced (PREREG.md section 11)');
+    expect(technicalWords(c, true, false, { objectionsReached: true, creditsUsedUp: true })).toBe(
+      'the SDK credits are used up (kCreditExhausted): pack C is lost and not replaced; the confirmatory numbers are those of pack B alone, flagged (PREREG.md section 11)',
+    );
+    expect(technicalWords({ set: 'session', d1: true }, true, false, before)).toBe('technical failure; spec 10.6 decides on a replacement');
   });
 
   it('knows when a detector was computed from the ledger', () => {

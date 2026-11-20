@@ -34,6 +34,7 @@ import {
   type Quickcheck,
   type RecordKind,
 } from '../core/schemas/index.ts';
+import { nextRecordingAdvice } from './gate/inputs.ts';
 import { sha256Hex } from './lib/ledger.ts';
 import { gateSteps } from './lib/steps.ts';
 import { encodeStereoFloatWav, readWavHeader } from './lib/wav.ts';
@@ -985,6 +986,26 @@ describe('a gate recording without a verdict', () => {
     // No objection block was heard, so there is no part B to hold back.
     expect(r.out.some((l) => l.includes('part B'))).toBe(false);
     expect(readSet(id)['stream.jsonl']).toBe(toJsonlText(STREAM, 'stream.jsonl'));
+  });
+
+  // PREREG.md section 11: "A recording that the SDK ends with kCreditExhausted is lost, reported with
+  // its reason and not replaced", before 4:15 too: pack says what quickcheck and analyze:gate say
+  // (analysis/gate/inputs.ts nextRecordingAdvice), not "record pack A again".
+  it('pack A, the SDK ended the recording with kCreditExhausted before 4:15: lost and not replaced, in the words of analyze:gate', async () => {
+    const credit = { n: null, e: 'sdk_error', by: 'host', code: 4, name: 'kCreditExhausted', message: 'The credits are used up.' };
+    const g = writeGate({ id: 'gate-a', pack: 'A', stage: 'quickcheck', quickcheck: 'technical', objectionsReached: false, events: [...exampleEvents(), credit] });
+    const before = g.ledgerText();
+    const r = await pack(['gate-a', ...OK]);
+    expect(r.code).toBe(0);
+    expect(g.ledgerText()).toBe(before);
+    const advice = nextRecordingAdvice({ technical: true, pack: 'A', objectionsReached: false, detectorComputed: false, creditsUsedUp: true });
+    expect(advice).toBe(
+      'The SDK ended the recording with kCreditExhausted, so its credits are used up: pack A is lost, reported with its reason and not replaced (PREREG.md section 11). Packs B, then C need credits too, so none can be recorded until the SDK has credits again.',
+    );
+    expect(r.out.filter((l) => l.startsWith('ledger: '))).toEqual([
+      `ledger: no pack step: gate-a never reached its verdict: quickcheck.json says RE-RECORD NOW: trace rate 12.0 per second (need 25). ${advice}`,
+    ]);
+    expect(r.all).not.toMatch(/record pack A again|does not spend/);
   });
 
   /** events.jsonl around the step mark of the objection block (n 1500 in stampsOf). */

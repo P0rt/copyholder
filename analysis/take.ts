@@ -114,19 +114,23 @@ export function main(argv: readonly string[], env: NodeJS.ProcessEnv = process.e
     err(USAGE);
     return 2;
   }
-  const checks: TakeCheck[] = [];
+  // Every take is read before anything is printed: a take that cannot be read refuses the whole
+  // run, so no report or QUALIFIES line of another take comes before the refusal.
+  const takes: StampLine[][] = [];
   for (const id of ids) {
-    let stamps: StampLine[];
     try {
-      stamps = readTake(id, env);
+      takes.push(readTake(id, env));
     } catch (e) {
       err(`take refused: ${e instanceof Error ? e.message : String(e)}`);
       return 1;
     }
-    const c = checkTake(stamps);
+  }
+  const checks: TakeCheck[] = [];
+  ids.forEach((id, i) => {
+    const c = checkTake(takes[i]!);
     checks.push(c);
     for (const l of takeLines(id, c)) out(l);
-  }
+  });
   const p = publishedTake(ids, checks);
   out(`published by the rule: ${p.id} (${p.why})`);
   return 0;

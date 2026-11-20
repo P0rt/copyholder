@@ -23,6 +23,8 @@ import {
 } from './frozen.ts';
 import {
   LABEL_ORDER_NOTE,
+  LATER_PACKS,
+  creditsUsedUp,
   labelOrderNote,
   labelsHashOfNote,
   nextRecordingAdvice,
@@ -502,25 +504,83 @@ describe('a recording that counts, and the labels it is scored with (spec 8.5, 9
     }
   });
 
-  // Spec 9.4, PREREG §7.4: after RE-RECORD NOW, the same pack only if the recording broke off
-  // before 4:15; a technical failure does not spend the one content re-record.
-  it('says which pack to record next, and whether the content re-record is spent', () => {
-    const advice = (technical: boolean, pack: 'A' | 'B' | 'C', objectionsReached: boolean, detectorComputed = false): string =>
-      nextRecordingAdvice({ technical, pack, objectionsReached, detectorComputed });
-    expect(advice(true, 'A', false)).toBe(
+  // Spec 9.4, PREREG §7.4 for pack A (section 11: "exactly as §7 says"): after RE-RECORD NOW, the
+  // same pack only if the recording broke off before 4:15; a technical failure does not spend the
+  // one content re-record. Packs B and C follow section 11.
+  it('says which pack to record next, and whether the content re-record is spent (pack A)', () => {
+    const advice = (technical: boolean, objectionsReached: boolean, detectorComputed = false): string =>
+      nextRecordingAdvice({ technical, pack: 'A', objectionsReached, detectorComputed });
+    expect(advice(true, false)).toBe(
       'The failure is technical. Remove the cause, repeat pack 0 until it says GOOD RECORDING, then record pack A again: the recording broke off before the objection block (4:15), so its errors were not heard (spec 9.4). A technical failure with no detector computed does not spend the one re-record for content (spec 9.4).',
     );
-    expect(advice(true, 'A', true)).toMatch(/then record the next unused pack \(B, then C\): the objection block \(from 4:15\) was heard, so pack A cannot be recorded again \(spec 9\.4\)\. A technical failure with no detector computed does not spend/);
-    expect(advice(true, 'B', true)).toMatch(/record the next unused pack \(C\)/);
-    expect(advice(true, 'C', false)).toMatch(/then record pack C again: the recording broke off before/);
-    expect(advice(true, 'C', true)).toBe(
-      'The failure is technical, but the objection block (from 4:15) was heard, so pack C cannot be recorded again: no unused pack is left, so the gate does not take place this weekend (spec 9.4, 14.3).',
+    expect(advice(true, true)).toBe(
+      'The failure is technical. Remove the cause, repeat pack 0 until it says GOOD RECORDING, then record the next unused pack (B, then C): the objection block (from 4:15) was heard, so pack A cannot be recorded again (spec 9.4). A technical failure with no detector computed does not spend the one re-record for content (spec 9.4).',
     );
-    expect(advice(true, 'A', true, true)).toMatch(/Stage A already computed detectors on this recording, so it spends the one re-record for content \(spec 9\.4\)\.$/);
-    expect(advice(false, 'A', true)).toBe(
+    expect(advice(true, true, true)).toMatch(/Stage A already computed detectors on this recording, so it spends the one re-record for content \(spec 9\.4\)\.$/);
+    expect(advice(false, true)).toBe(
       'quickcheck marks the failure as not technical (fewer than 12 replies, spec 9.4): record the next unused pack (B, then C), which is the one re-record for content (spec 9.6).',
     );
-    expect(advice(false, 'C', true)).toMatch(/not technical .*: no unused pack is left/);
+    expect(nextRecordingAdvice({ technical: true, pack: 'A', objectionsReached: true, detectorComputed: false, creditsUsedUp: false })).toBe(advice(true, true));
+    expect(LATER_PACKS).toEqual({ A: 'B, then C', B: 'C', C: '' });
+  });
+
+  // PREREG.md section 11: a technical failure on pack B or C before 4:15 is recorded again on the
+  // same pack; one after 4:15 is lost, reported with its reason and not replaced; a pack with fewer
+  // than 12 valid objections stays in the pooled numbers, flagged. Pack C lost: pack B alone.
+  it('follows section 11 on packs B and C: recorded again before 4:15, lost after it, kept with fewer than 12', () => {
+    const advice = (technical: boolean, pack: 'B' | 'C', objectionsReached: boolean, detectorComputed = false): string =>
+      nextRecordingAdvice({ technical, pack, objectionsReached, detectorComputed });
+    for (const pack of ['B', 'C'] as const) {
+      expect(advice(true, pack, false)).toBe(
+        `The failure is technical. Remove the cause, repeat pack 0 until it says GOOD RECORDING, then record pack ${pack} again: the recording broke off before the objection block (4:15), so its errors were not heard (PREREG.md section 11).`,
+      );
+      expect(advice(true, pack, false, true)).toBe(advice(true, pack, false));
+      expect(advice(false, pack, true)).toBe(
+        `quickcheck marks the failure as not technical (fewer than 12 replies, spec 9.4): pack ${pack} is not recorded again, because section 11 keeps a pack with fewer than 12 valid objections in the pooled numbers, flagged. Stage A and stage B do not score it; npm run confirm does, once clocks and label have run on it (PREREG.md section 11).`,
+      );
+      for (const text of [advice(true, pack, false), advice(true, pack, true), advice(false, pack, true)]) {
+        expect(text).not.toMatch(/next unused pack|re-record for content|does not take place/);
+      }
+    }
+    expect(advice(true, 'B', true)).toBe(
+      'The failure is technical, but the objection block (from 4:15) was heard, so pack B is lost, reported with its reason and not replaced (PREREG.md section 11). Go on in the order of section 11, with one demo take, then pack C; npm run confirm -- <idB> <idC> takes this recording as <idB> and reports it as lost.',
+    );
+    expect(advice(true, 'C', true)).toBe(
+      'The failure is technical, but the objection block (from 4:15) was heard, so pack C is lost, reported with its reason and not replaced (PREREG.md section 11). The confirmatory numbers are those of pack B alone, flagged: npm run confirm -- <idB> <idC> takes this recording as <idC> and reports it as lost.',
+    );
+  });
+
+  // PREREG.md section 11: "A recording that the SDK ends with kCreditExhausted is lost, reported with
+  // its reason and not replaced", before 4:15 too and on every pack; it is never a free re-record.
+  it('loses a recording the SDK ended with kCreditExhausted, on every pack and before 4:15 too', () => {
+    const credits = (pack: 'A' | 'B' | 'C', objectionsReached: boolean, technical = true): string =>
+      nextRecordingAdvice({ technical, pack, objectionsReached, detectorComputed: false, creditsUsedUp: true });
+    const head = (pack: string): string =>
+      `The SDK ended the recording with kCreditExhausted, so its credits are used up: pack ${pack} is lost, reported with its reason and not replaced (PREREG.md section 11).`;
+    expect(credits('A', false)).toBe(`${head('A')} Packs B, then C need credits too, so none can be recorded until the SDK has credits again.`);
+    expect(credits('B', true)).toBe(
+      `${head('B')} The demo take and pack C need credits too, so neither can start until the SDK has credits again; without pack C there are no confirmatory numbers, and npm run confirm -- <idB> reports this recording as lost.`,
+    );
+    expect(credits('C', false)).toBe(
+      `${head('C')} The confirmatory numbers are those of pack B alone, flagged: npm run confirm -- <idB> <idC> takes this recording as <idC> and reports it as lost.`,
+    );
+    for (const pack of ['A', 'B', 'C'] as const) {
+      expect(credits(pack, true)).toBe(credits(pack, false));
+      expect(credits(pack, false, false)).toBe(credits(pack, false));
+      expect(credits(pack, false)).not.toMatch(/does not spend|free|record pack [ABC] again|next unused pack/);
+    }
+  });
+
+  it('reads the credit loss from events.jsonl as host writes it, as npm run confirm does', () => {
+    const sdkError = (fields: Record<string, unknown>) => ({ n: 4_800_000, e: 'sdk_error', by: 'host', message: 'stopped', ...fields });
+    expect(creditsUsedUp([sdkError({ code: 4, name: 'kCreditExhausted' })])).toBe(true);
+    expect(creditsUsedUp([sdkError({ code: 4, name: null })])).toBe(true);
+    expect(creditsUsedUp([sdkError({ code: null, name: 'kCreditExhausted' })])).toBe(true);
+    expect(creditsUsedUp([sdkError({ code: 5, name: 'kNetworkError' })])).toBe(false);
+    // The one restart line of host (code 8, action reset_restart) never ends the recording.
+    expect(creditsUsedUp([sdkError({ code: 4, name: 'kCreditExhausted', action: 'reset_restart' })])).toBe(false);
+    expect(creditsUsedUp([{ n: 10, e: 'tap_lost', code: 4 }, { n: 11, e: 'page_hidden', name: 'kCreditExhausted' }])).toBe(false);
+    expect(creditsUsedUp([])).toBe(false);
   });
 
   it('gives the content re-record advice only when condition 6 alone failed and the clock check passed', () => {

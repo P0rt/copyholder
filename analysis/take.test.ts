@@ -84,6 +84,17 @@ describe('npm run take on session folders', () => {
     expect(main(['headstart-8'], env, () => {}, () => {})).toBe(0);
   });
 
+  it('reads every take before it prints: a later mock take leaves nothing but the refusal', () => {
+    write('headstart-21', 'headstart', [chunk, hold(10), voice(10.6, true), voice(12, false)], 'real');
+    write('headstart-22', 'headstart', [chunk, hold(10), voice(10.6, true), voice(12, false)], 'mock');
+    const out: string[] = [];
+    const err: string[] = [];
+    expect(main(['headstart-21'], env, () => {}, () => {})).toBe(0);
+    expect(main(['headstart-21', 'headstart-22'], env, (l) => out.push(l), (l) => err.push(l))).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual(['take refused: headstart-22 ran with the mock tap, a synthetic chest trace: it is a rehearsal, not a take']);
+  });
+
   it('refuses a folder that is not a headstart take, and a wrong command line', () => {
     write('smoke-1', 'smoke', [chunk]);
     const err: string[] = [];

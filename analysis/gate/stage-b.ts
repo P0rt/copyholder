@@ -30,7 +30,7 @@ import { finishInterruptedRun, prepareGateSteps, readGateLedger, requireStep, st
 import { scoreGate, type GateScore } from './score.ts';
 import { loadGateSession, outputFileOf, signOf } from './stage-a.ts';
 import { verdictMarkdown } from './verdict-text.ts';
-import { gateLayout, scoredCues } from './view.ts';
+import { gateLayout, gatePackOfSession, scoredCues } from './view.ts';
 
 export { ONSETS_FILE };
 
@@ -74,6 +74,10 @@ export function runStageB(o: StageBOptions): StageBOutcome {
   const { deps } = o;
   if (!o.exploratory && o.paramsFile) throw new GateRefusal('--params is for exploratory runs only: the confirmatory stage B scores params/frozen.json as stage A froze it');
   const s = loadGateSession(o.id, deps.env);
+  // The record kind, the pack and whether an SDK measured the run are checked before the ledger, as
+  // stage A does: pack 0 and a rehearsal get their own refusal, not a ledger-order one (spec 9.4,
+  // PREREG.md section 11).
+  gatePackOfSession(s);
   const ledger = readGateLedger(s.dir, s.ledgerLines);
   const run = stageBRuns(ledger) + 1;
   const tag = exploratoryTag('B', run, o.exploratory);

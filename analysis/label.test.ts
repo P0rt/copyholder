@@ -1019,6 +1019,30 @@ describe('label command and the ledger order', () => {
     expect(fs.existsSync(path.join(dir, LOCK_FILE))).toBe(false);
   });
 
+  // PREREG.md section 11: a gate run no SDK measured is a rehearsal; label writes no onsets, no
+  // labels and no ledger line for it, and takes no lock.
+  // The run reached its objection block, so it played the planted errors of pack A (section 7.1).
+  it('refuses a gate run with the mock tap, confirmatory or exploratory, writes nothing, and says to keep the folder', async () => {
+    const { dir } = makeGateFolder(ROOT, { id: 'gate-mock' });
+    const file = path.join(dir, 'manifest.json');
+    fs.writeFileSync(file, `${JSON.stringify({ ...(JSON.parse(fileText(dir, 'manifest.json')) as object), tap: 'mock', sdk: null }, null, 2)}\n`);
+    const before = fs.readdirSync(dir).sort();
+    const ledger = fileText(dir, 'ledger.jsonl');
+    const why =
+      'this recording is a rehearsal, not a recording of pack A: manifest.json says tap: "mock" (the mock tap made up the chest trace), so no SDK measured the chest (PREREG.md section 11). It played the planted errors of pack A (its objection block, from 4:15, began), and the participant does not hear a pack before it is recorded (PREREG.md section 7.1): keep this folder as the record of that, and do not record pack A with a participant who heard this run.';
+    for (const exploratory of [false, true]) {
+      const lines: string[] = [];
+      const run = await runLabel(loadSession(dir), { exploratory }, deps({ out: (l) => lines.push(l) }));
+      expect(run.code).toBe(EXIT_REFUSED);
+      expect(run.refused).toBe(why);
+      expect(lines).toEqual([`LABEL DID NOT RUN for gate-mock: ${why}`]);
+      expect(fs.readdirSync(dir).sort()).toEqual(before);
+      expect(fs.existsSync(path.join(dir, 'onsets.json'))).toBe(false);
+      expect(fs.existsSync(path.join(dir, LOCK_FILE))).toBe(false);
+      expect(fileText(dir, 'ledger.jsonl')).toBe(ledger);
+    }
+  });
+
   it('--exploratory before the confirmatory run is refused', async () => {
     const { dir } = makeGateFolder(ROOT, { id: 'gate-ex-early' });
     const run = await runLabel(loadSession(dir), { exploratory: true }, deps());

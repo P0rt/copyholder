@@ -40,7 +40,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { chunkLayout } from '../core/clock/index.ts';
+import { chunkLayout, type EventLine } from '../core/clock/index.ts';
 import type { DetectorInput } from '../core/detector.ts';
 import {
   SESSION_ID,
@@ -59,6 +59,7 @@ import {
   toPublishedManifest,
   validateClockReport,
   validateDetectorInLine,
+  validateEventLine,
   validateManifest,
   validatePublishedFolder,
   validateQuickcheck,
@@ -71,7 +72,7 @@ import {
   type StreamText,
   type Validator,
 } from '../core/schemas/index.ts';
-import { nextRecordingAdvice, recordedHash, recordingVoidReasons } from './gate/inputs.ts';
+import { creditsUsedUp, nextRecordingAdvice, recordedHash, recordingVoidReasons } from './gate/inputs.ts';
 import { arrivalsBefore, detectorInPrefixLength } from './gate/view.ts';
 import { gitShortCommit } from './lib/git.ts';
 import { prepareLedgerStep, sha256Hex, utcSeconds, writeLedgerLine } from './lib/ledger.ts';
@@ -264,6 +265,12 @@ function stampRows(stamps: Buffer): StampLine[] {
   return parseJsonl(splitTruncatedTail(stamps.toString('utf8')).complete, validateStampLine, { file: 'stamps.jsonl' }).rows;
 }
 
+/** The valid lines of events.jsonl, as the session loader reads them, a last line cut short by a crash left out; none without the file. */
+function eventRows(events: Buffer | null): EventLine[] {
+  if (events === null) return [];
+  return parseJsonl(splitTruncatedTail(events.toString('utf8')).complete, validateEventLine, { file: 'events.jsonl' }).rows as EventLine[];
+}
+
 /**
  * Sample of the objection block's step mark (4:15) in stamps.jsonl, the first one as stage A
  * takes it (analysis/lib/session.ts stepStart); null when the block never began.
@@ -281,14 +288,29 @@ function objectionBlockStart(stamps: Buffer | null, pack: 'A' | 'B' | 'C'): numb
 /**
  * Why a gate recording that does not count never reaches its verdict, and what comes next, by
  * pack. Pack A follows PREREG section 7 (section 11: "exactly as §7 says"), in the words of
- * analyze:gate (analysis/gate/inputs.ts nextRecordingAdvice). Packs B and C follow section 11:
- * before 4:15 the pack is recorded again; after it the recording is lost; a failure on condition
- * 6 alone (fewer than 12 valid objections) stays in the pooled numbers, flagged.
+ * analyze:gate (analysis/gate/inputs.ts nextRecordingAdvice), which quickcheck gives too: a
+ * recording the SDK ended with kCreditExhausted is lost, before 4:15 too, and not replaced. Packs B
+ * and C follow section 11: before 4:15 the pack is recorded again; after it the recording is lost;
+ * a failure on condition 6 alone (fewer than 12 valid objections) stays in the pooled numbers, flagged.
  */
-function noVerdictReason(a: { id: string; pack: 'A' | 'B' | 'C'; contentOnly: boolean; objectionsReached: boolean; detectorComputed: boolean; reason: string }): string {
+function noVerdictReason(a: {
+  id: string;
+  pack: 'A' | 'B' | 'C';
+  contentOnly: boolean;
+  objectionsReached: boolean;
+  detectorComputed: boolean;
+  creditsUsedUp: boolean;
+  reason: string;
+}): string {
   const head = `${a.id} never reached its verdict: ${a.reason}.`;
   if (a.pack === 'A') {
-    const advice = nextRecordingAdvice({ technical: !a.contentOnly, pack: 'A', objectionsReached: a.objectionsReached, detectorComputed: a.detectorComputed });
+    const advice = nextRecordingAdvice({
+      technical: !a.contentOnly,
+      pack: 'A',
+      objectionsReached: a.objectionsReached,
+      detectorComputed: a.detectorComputed,
+      creditsUsedUp: a.creditsUsedUp,
+    });
     return `${head} ${advice.charAt(0).toUpperCase()}${advice.slice(1)}`;
   }
   if (a.contentOnly) {
@@ -345,6 +367,7 @@ function gateLedgerPlan(dir: string, id: string, pack: 'A' | 'B' | 'C'): LedgerP
     contentOnly,
     objectionsReached: objectionsAt !== null,
     detectorComputed: stageAInLedger,
+    creditsUsedUp: creditsUsedUp(eventRows(readSessionFile(dir, SESSION_FILES.events))),
     reason: reasons[0]!,
   });
   if (objectionsAt === null) return { mode: 'skip', records, why, cutAt: null, notes: [] };

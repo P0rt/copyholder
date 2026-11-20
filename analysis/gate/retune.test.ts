@@ -649,4 +649,22 @@ describe('npm run retune on synthetic pack A recordings', () => {
     expect(await retune([], e.deps)).toBe(2);
     expect(e.err.at(-1)).toMatch(/usage: npm run retune -- <id> \[--write\]/);
   });
+
+  // PREREG.md section 11: a pack A run no SDK measured is a rehearsal. retune reaches the refusal
+  // through gateLayout, as confirm does, so the refusal names no command but the ones to run next.
+  it('refuses a pack A run with the mock tap, naming no other command, and writes nothing', async () => {
+    const e = env('rehearsal');
+    const dir = record(e, { replies: inhale(10) });
+    const file = path.join(dir, 'manifest.json');
+    fs.writeFileSync(file, `${JSON.stringify({ ...readJson(file), tap: 'mock', sdk: null }, null, 2)}\n`);
+    const before = fs.readdirSync(dir).sort();
+    expect(await retune(['gate-a', '--write'], e.deps)).toBe(1);
+    expect(e.err).toEqual([
+      'retune refused: this recording is a rehearsal, not a recording of pack A: manifest.json says tap: "mock" (the mock tap made up the chest trace), so no SDK measured the chest (PREREG.md section 11). It played the planted errors of pack A (its objection block, from 4:15, began), and the participant does not hear a pack before it is recorded (PREREG.md section 7.1): keep this folder as the record of that, and do not record pack A with a participant who heard this run.',
+    ]);
+    expect(e.err.join('\n')).not.toMatch(/analyze:gate|Run /);
+    expect(fs.readdirSync(dir).sort()).toEqual(before);
+    expect(read(e.paramsFile)).toBe(PREREG);
+    expect(fs.existsSync(e.retuneFile)).toBe(false);
+  });
 });

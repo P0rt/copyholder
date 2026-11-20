@@ -179,26 +179,79 @@ export interface RecordingAt {
   pack: 'A' | 'B' | 'C';
   /** The objection block began: its step mark (4:15) is in stamps.jsonl, so its errors were heard. */
   objectionsReached: boolean;
+  /** The SDK ended the recording with kCreditExhausted: lost and not replaced (PREREG.md section 11). */
+  creditsUsedUp?: boolean;
 }
 
-/** The pack and how far a gate recording ran, from manifest.json and the step marks (spec 9.3, 9.4). */
-export function recordingAt(s: Pick<LoadedSession, 'dir' | 'kind' | 'manifest' | 'stamps'>): RecordingAt {
-  const pack = gatePackOfSession(s);
-  return { dir: s.dir, pack, objectionsReached: stepStart(s, gateSteps(pack).objections) !== null };
-}
-
-/** Packs after `pack` in the order of spec 9.4 (B, then C). */
-const LATER_PACKS: Readonly<Record<RecordingAt['pack'], string>> = { A: 'B, then C', B: 'C', C: '' };
+/** kCreditExhausted, the SDK error for used-up credits (live/lib/sdk-codes.cjs). */
+export const CREDIT_EXHAUSTED = { code: 4, name: 'kCreditExhausted' } as const;
 
 /**
- * What to record next after a recording that does not count (spec 9.4, PREREG §7.4). A failure is
- * technical unless the only one is quickcheck condition 6 (fewer than 12 replies) with the clock
- * check passed. A technical failure: remove the cause, repeat pack 0 until GOOD RECORDING, then the
- * same pack if the recording broke off before the objection block (4:15), else the next unused
- * one; with no detector computed yet it does not spend the one content re-record. A failure on
- * condition 6 alone: the next unused pack is the one content re-record.
+ * Whether the SDK ended the recording because its credits ran out: an events.jsonl line `sdk_error`
+ * with code 4 or the name kCreditExhausted. Host writes such a line only while it records, and then
+ * stops the recording (live/host.cjs onSdkError); the one restart of code 8 (action reset_restart)
+ * is not an end. npm run confirm reads the same lines (analysis/confirm/load.ts creditExhaustedEvent).
  */
-export function nextRecordingAdvice(a: { technical: boolean; pack: RecordingAt['pack']; objectionsReached: boolean; detectorComputed: boolean }): string {
+export function creditsUsedUp(events: LoadedSession['events']): boolean {
+  return events.some(
+    (ev) => ev.e === 'sdk_error' && ev['action'] !== 'reset_restart' && (ev['code'] === CREDIT_EXHAUSTED.code || ev['name'] === CREDIT_EXHAUSTED.name),
+  );
+}
+
+/** The pack and how far a gate recording ran, from manifest.json, the step marks and events.jsonl (spec 9.3, 9.4). */
+export function recordingAt(s: Pick<LoadedSession, 'dir' | 'kind' | 'manifest' | 'stamps' | 'events'>): RecordingAt {
+  const pack = gatePackOfSession(s);
+  return { dir: s.dir, pack, objectionsReached: stepStart(s, gateSteps(pack).objections) !== null, creditsUsedUp: creditsUsedUp(s.events) };
+}
+
+/** Packs after `pack` in the order of spec 9.4 (B, then C); none after C. */
+export const LATER_PACKS: Readonly<Record<RecordingAt['pack'], string>> = { A: 'B, then C', B: 'C', C: '' };
+
+/** What follows a lost pack B or C in the order of PREREG.md section 11. */
+function afterLostPack(pack: 'B' | 'C'): string {
+  return pack === 'B'
+    ? 'Go on in the order of section 11, with one demo take, then pack C; npm run confirm -- <idB> <idC> takes this recording as <idB> and reports it as lost.'
+    : 'The confirmatory numbers are those of pack B alone, flagged: npm run confirm -- <idB> <idC> takes this recording as <idC> and reports it as lost.';
+}
+
+/**
+ * What comes after a recording that the SDK ended with kCreditExhausted (PREREG.md section 11): it is
+ * lost, reported with its reason and not replaced, on every pack, and every later recording needs
+ * credits too.
+ */
+function creditsAdvice(pack: RecordingAt['pack']): string {
+  const head = `The SDK ended the recording with kCreditExhausted, so its credits are used up: pack ${pack} is lost, reported with its reason and not replaced (PREREG.md section 11).`;
+  if (pack === 'A') return `${head} Packs ${LATER_PACKS.A} need credits too, so none can be recorded until the SDK has credits again.`;
+  if (pack === 'B') {
+    return `${head} The demo take and pack C need credits too, so neither can start until the SDK has credits again; without pack C there are no confirmatory numbers, and npm run confirm -- <idB> reports this recording as lost.`;
+  }
+  return `${head} ${afterLostPack(pack)}`;
+}
+
+/**
+ * What to record next after a recording that does not count (spec 9.4, PREREG §7.4 and section 11).
+ * A failure is technical unless the only one is quickcheck condition 6 (fewer than 12 replies) with
+ * the clock check passed. A recording the SDK ended with kCreditExhausted is lost, reported with its
+ * reason and not replaced, whatever the pack (section 11).
+ * Pack A follows §7.4, as section 11 says: a technical failure means remove the cause, repeat pack 0
+ * until GOOD RECORDING, then the same pack if the recording broke off before the objection block
+ * (4:15), else the next unused one; with no detector computed yet it does not spend the one content
+ * re-record. A failure on condition 6 alone: the next unused pack is the one content re-record.
+ * Packs B and C follow section 11: a technical failure before 4:15 is recorded again on the same
+ * pack, one after 4:15 is lost and not replaced, and a failure on condition 6 alone is not recorded
+ * again but stays in the pooled numbers, flagged.
+ */
+export function nextRecordingAdvice(a: { technical: boolean; pack: RecordingAt['pack']; objectionsReached: boolean; detectorComputed: boolean; creditsUsedUp?: boolean }): string {
+  if (a.creditsUsedUp === true) return creditsAdvice(a.pack);
+  if (a.pack !== 'A') {
+    if (!a.technical) {
+      return `quickcheck marks the failure as not technical (fewer than 12 replies, spec 9.4): pack ${a.pack} is not recorded again, because section 11 keeps a pack with fewer than 12 valid objections in the pooled numbers, flagged. Stage A and stage B do not score it; npm run confirm does, once clocks and label have run on it (PREREG.md section 11).`;
+    }
+    if (!a.objectionsReached) {
+      return `The failure is technical. Remove the cause, repeat pack 0 until it says GOOD RECORDING, then record pack ${a.pack} again: the recording broke off before the objection block (4:15), so its errors were not heard (PREREG.md section 11).`;
+    }
+    return `The failure is technical, but the objection block (from 4:15) was heard, so pack ${a.pack} is lost, reported with its reason and not replaced (PREREG.md section 11). ${afterLostPack(a.pack)}`;
+  }
   const later = LATER_PACKS[a.pack];
   const none = 'no unused pack is left, so the gate does not take place this weekend (spec 9.4, 14.3)';
   if (!a.technical) {
@@ -238,6 +291,7 @@ export function requireCountedRecording(records: readonly LedgerLine[], at: Reco
       pack: at.pack,
       objectionsReached: at.objectionsReached,
       detectorComputed: records.some((r) => !isNoteLine(r) && r.step === 'stage_a'),
+      creditsUsedUp: at.creditsUsedUp ?? false,
     });
     throw new GateRefusal(['this recording does not count, so analyze:gate does not score it (spec 9.4, 9.6):', ...reasons.map((r) => `  ${r}`), next].join('\n'));
   }

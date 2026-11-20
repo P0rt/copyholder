@@ -6,6 +6,8 @@
 // the ledger, before anything joins the detectors' answers (stage_a needs `label` in the ledger).
 // One run at a time holds label.lock. A second run needs --exploratory: it writes
 // label-exploratory-<k>.json and a ledger note, and leaves the confirmatory files alone.
+// A gate run no SDK measured (the mock tap, tap's stand-in SDK) is a rehearsal and is refused
+// before anything is written (PREREG.md section 11, analysis/lib/rehearsal.ts).
 //
 //   npx tsx analysis/label.ts <id> [--exploratory] [--no-open]
 //   exit 0 saved, 1 refused or crashed, 130 stopped before the last mark
@@ -58,6 +60,7 @@ import { channel0Window } from './label/window.ts';
 import { gitShortCommit } from './lib/git.ts';
 import { appendLedgerStep, sha256Hex, utcSeconds } from './lib/ledger.ts';
 import { REPO_ROOT } from './lib/paths.ts';
+import { rehearsalRefusal } from './lib/rehearsal.ts';
 import { SessionLoadError, loadSession, type LoadedSession } from './lib/session.ts';
 import { gatePackOf, gateSteps, type GateSteps } from './lib/steps.ts';
 
@@ -113,7 +116,10 @@ type LabelPlan = { gate: GateSteps } | { gate: null };
 function labelPlan(session: LoadedSession): LabelPlan | { refuse: string } {
   if (session.kind !== 'gate') return { gate: null };
   const pack = session.manifest.pack ?? gatePackOf(String(session.manifest['scenario'] ?? ''));
-  return pack === null ? { refuse: 'the gate recording names no pack in manifest.json' } : { gate: gateSteps(pack) };
+  if (pack === null) return { refuse: 'the gate recording names no pack in manifest.json' };
+  // A gate run no SDK measured is a rehearsal: no onsets or labels are written for it (PREREG.md section 11).
+  const rehearsal = rehearsalRefusal(session, pack);
+  return rehearsal === null ? { gate: gateSteps(pack) } : { refuse: rehearsal };
 }
 
 interface AutomaticPart {

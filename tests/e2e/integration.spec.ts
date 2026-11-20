@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { chromium, expect, test, type Browser, type Page, type TestInfo } from '@playwright/test';
 import { loadSession, stepMarks, stepSpan, type LoadedSession } from '../../analysis/lib/session.ts';
 import { QUESTION_KEYS } from '../../analysis/smoke/report.ts';
@@ -77,6 +77,12 @@ const GAIN_TOLERANCE_DB = 0.5;
 /** Loop check A not heard (analysis/lib/conditions.ts loop_checks): the one reason the gate run must fail on. */
 const LOOP_A_REASON = /^loop check A was not found: only \d+ of 10 clicks were found at the same delay \(within 1 ms of their median\); press one earpiece onto the microphone and hold it still during the clicks$/;
 const GATE_PROBE_WORDS = 'technical failure; fix it and repeat the short probe until it gives GOOD RECORDING (spec 9.4)';
+/**
+ * quickcheck's stdout line before the verdict of a probe (pack 0) run with the mock tap in the folder
+ * `folder`, with what to do next (analysis/lib/rehearsal.ts, PREREG.md section 11).
+ */
+const gateMockRehearsal = (folder: string): string =>
+  `This run is a rehearsal, not data: manifest.json says tap: "mock" (the mock tap made up the chest trace), so no SDK measured the chest, and clocks, label and analyze:gate refuse it (PREREG.md section 11). Delete it with npm run purge -- ${folder} --yes, and record the probe with the real tap (npm run gate -- --pack 0, without --tap mock).`;
 /** doctor's hard check of the loop clicks (analysis/doctor.ts) when loop check A is not heard. */
 const DOCTOR_LOOP_A = 'clicks of loop check A not found: press one earpiece onto the microphone and hold it still during the clicks';
 
@@ -591,9 +597,11 @@ test('gate --pack 0: the probe with the mock tap, RE-RECORD NOW on the loop chec
   expect(bare(record?.out_sha256['audio.wav'] ?? '')).toBe(sha256(readFileSync(join(run.dir, 'audio.wav'))));
   expect(bare(qcStep?.out_sha256['quickcheck.json'] ?? '')).toBe(sha256(readFileSync(join(run.dir, 'quickcheck.json'))));
 
-  // quickcheck: exactly one stdout line, RE-RECORD NOW for loop check A, and no other hard condition
-  // failed (but the sample rate, when the track is not at 48 kHz: see trackRate)
-  expect(run.quickcheckLines.length, 'quickcheck stdout lines').toBe(1);
+  // quickcheck: two stdout lines, the rehearsal line of a run with the mock tap (PREREG.md section 11)
+  // and then the one verdict, RE-RECORD NOW for loop check A, with no other hard condition failed
+  // (but the sample rate, when the track is not at 48 kHz: see trackRate)
+  expect(run.quickcheckLines.length, 'quickcheck stdout lines').toBe(2);
+  expect(run.quickcheckLines[0] === gateMockRehearsal(basename(run.dir)), `the line before the verdict: ${shownText(run.quickcheckLines[0] ?? '', secret)}`).toBe(true);
   const line = expectOneVerdict(run, /^(GOOD RECORDING|RE-RECORD NOW: .*)$/, false, secret);
   const qc = readJson<Quickcheck>(join(run.dir, 'quickcheck.json'));
   const rate = trackRate(run, testInfo);

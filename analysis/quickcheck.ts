@@ -1,8 +1,12 @@
-// quickcheck (spec 7.12, 9.4): runs after every recording and prints exactly one verdict line on
-// stdout, GOOD RECORDING or RE-RECORD NOW: <reason>; the per-condition report goes to stderr.
+// quickcheck (spec 7.12, 9.4): runs after every recording and prints one verdict line on stdout,
+// last, GOOD RECORDING or RE-RECORD NOW: <reason>; the per-condition report goes to stderr.
 // Writes quickcheck.json and the ledger step `quickcheck` (spec 8.5). Doctor recordings get the
 // doctor report, smoke recordings the smoke report. A dry run (tap's stand-in SDK, manifest.json
-// dry: true) is refused before any check and nothing is written (spec 6.5).
+// dry: true) is refused before any check and nothing is written (spec 6.5). A gate run that no SDK
+// measured (the mock tap) is checked as usual, but one stdout line before the verdict says that it
+// is a rehearsal, not data, and what to do with its folder; when such a run of pack A, B or C fails,
+// its verdict and advice say it is a rehearsal instead of what a failed recording of the pack costs
+// (PREREG.md sections 7.1 and 11, analysis/lib/rehearsal.ts).
 //
 //   npx tsx analysis/quickcheck.ts <id>     exit 0 GOOD RECORDING, 2 RE-RECORD NOW, 1 crash
 
@@ -47,10 +51,12 @@ import {
   type ConditionResult,
   type ConditionSession,
 } from './lib/conditions.ts';
+import { LATER_PACKS, creditsUsedUp, nextRecordingAdvice } from './gate/inputs.ts';
 import { gitShortCommit } from './lib/git.ts';
 import { ledgerRecords, prepareLedgerStep, sha256Hex, utcSeconds, writeLedgerLine } from './lib/ledger.ts';
 import { measureLoops } from './lib/measure.ts';
 import { REPO_ROOT } from './lib/paths.ts';
+import { notMeasuredWords, rehearsalAdvice, rehearsalLine, rehearsalVerdictWords } from './lib/rehearsal.ts';
 import { SESSION_FILES, loadSession, stepStart, type LoadedSession } from './lib/session.ts';
 import { gateSteps, gatePackOf, type GatePack } from './lib/steps.ts';
 
@@ -155,15 +161,39 @@ export interface QuickcheckEvaluation {
   report: string[];
 }
 
+/** What follows a lost pack C (PREREG.md section 11). */
+const PACK_B_ALONE = 'the confirmatory numbers are those of pack B alone, flagged';
+
+/** How far a gate recording ran: the objection block (4:15) began; the SDK ended it with kCreditExhausted. */
+export interface RecordingEnd {
+  objectionsReached: boolean;
+  creditsUsedUp: boolean;
+}
+
 /**
- * Plain words on whether the failure is technical and what it costs (spec 9.4, 9.6, 10.6). The
- * pack-0 probe spends no pack: whatever failed, it is repeated until GOOD RECORDING (spec 9.4).
+ * Plain words on whether the failure is technical and what it costs, the bracket of the verdict
+ * line (spec 9.4, 9.6, 10.6, PREREG.md section 11). The pack-0 probe spends no pack: whatever
+ * failed, it is repeated until GOOD RECORDING (spec 9.4). Pack A follows spec 9.4. Packs B and C
+ * follow section 11: a technical failure before 4:15 is recorded again on the same pack, one after
+ * 4:15 is lost and not replaced, and a failure on condition 6 alone stays in the pooled numbers,
+ * flagged. A recording the SDK ended with kCreditExhausted is lost and not replaced, on any pack.
  */
-export function technicalWords(plan: QuickcheckPlan, technical: boolean, computed: boolean): string {
+export function technicalWords(plan: QuickcheckPlan, technical: boolean, computed: boolean, end: RecordingEnd): string {
+  if (plan.set === 'gate' && end.creditsUsedUp) {
+    const credits = 'the SDK credits are used up (kCreditExhausted)';
+    if (plan.pack === '0') return `${credits}: nothing can be recorded until the SDK has credits again (PREREG.md section 11)`;
+    return `${credits}: pack ${plan.pack} is lost and not replaced${plan.pack === 'C' ? `; ${PACK_B_ALONE}` : ''} (PREREG.md section 11)`;
+  }
   if (plan.set === 'gate' && plan.pack === '0') {
     return technical
       ? 'technical failure; fix it and repeat the short probe until it gives GOOD RECORDING (spec 9.4)'
       : 'not technical; the probe spends no pack: repeat the short probe until it gives GOOD RECORDING (spec 9.4)';
+  }
+  if (plan.set === 'gate' && (plan.pack === 'B' || plan.pack === 'C')) {
+    if (!technical) return `not technical: pack ${plan.pack} is not recorded again and stays in the pooled numbers, flagged (PREREG.md section 11)`;
+    if (!end.objectionsReached) return `technical failure before 4:15: pack ${plan.pack} is recorded again (PREREG.md section 11)`;
+    const later = LATER_PACKS[plan.pack];
+    return `technical failure after 4:15: pack ${plan.pack} is lost and not replaced; ${later === '' ? PACK_B_ALONE : `next come one demo take and pack ${later}`} (PREREG.md section 11)`;
   }
   if (!technical) return 'not technical: the next recording is the one content re-record (spec 9.6)';
   if (plan.set !== 'gate') return 'technical failure; spec 10.6 decides on a replacement';
@@ -182,9 +212,14 @@ export function failedInOrder(conditions: readonly ConditionResult[]): Condition
   return [...failed.filter((c) => c.technical), ...failed.filter((c) => !c.technical)];
 }
 
-/** Pure verdict: conditions, quickcheck.json, the printed report and the verdict line. */
+/**
+ * Pure verdict: conditions, quickcheck.json, the printed report and the verdict line. A failed
+ * gate run of pack A, B or C that no SDK measured is a rehearsal (analysis/lib/rehearsal.ts): its
+ * line and advice say so, in place of what a failed recording of the pack costs (PREREG.md
+ * section 11). The probe keeps its words either way.
+ */
 export function evaluateQuickcheck(
-  s: ConditionSession & Pick<LoadedSession, 'id' | 'kind'>,
+  s: ConditionSession & Pick<LoadedSession, 'id' | 'kind' | 'dir'>,
   plan: QuickcheckPlan,
   ctx: ConditionContext,
   opts: { problems?: readonly string[]; detectorComputed?: boolean } = {},
@@ -217,17 +252,28 @@ export function evaluateQuickcheck(
     line = flag ? `GOOD RECORDING (flagged: loop checks A and B differ by ${Number(flag.value).toFixed(1)} ms)` : 'GOOD RECORDING';
   } else {
     const more = failed.length > 1 ? ` (and ${failed.length - 1} more)` : '';
-    line = `RE-RECORD NOW: ${failed[0]!.reason}${more} [${technicalWords(plan, technical === true, opts.detectorComputed ?? false)}]`;
+    // The same facts as analyze:gate's refusal (analysis/gate/inputs.ts recordingAt), so both give the same advice.
+    const end: RecordingEnd = {
+      objectionsReached: plan.set === 'gate' && plan.pack !== '0' && stepStart(s, gateSteps(plan.pack).objections) !== null,
+      creditsUsedUp: plan.set === 'gate' && creditsUsedUp(s.events),
+    };
+    const computed = opts.detectorComputed ?? false;
+    // A run of pack A, B or C that no SDK measured is no recording of the pack, so it is neither
+    // recorded again, nor lost, nor kept in the numbers: analyze:gate refuses it in the same words.
+    const rehearsal = plan.set === 'gate' && plan.pack !== '0' && notMeasuredWords(s.manifest) !== null ? plan.pack : null;
+    const words = rehearsal !== null ? rehearsalVerdictWords(rehearsal) : technicalWords(plan, technical === true, computed, end);
+    line = `RE-RECORD NOW: ${failed[0]!.reason}${more} [${words}]`;
     if (failed.length > 1) report.push(`Failed hard conditions, technical ones first: ${failed.map((c) => c.name).join(', ')}.`);
-    if (plan.set === 'gate' && plan.pack === '0') {
-      report.push('Fix the cause and repeat the probe (npm run gate -- --pack 0) until it gives GOOD RECORDING (spec 9.4).');
-    } else if (plan.set === 'gate') {
-      const objections = gateSteps(plan.pack).objections;
+    if (rehearsal !== null) {
+      report.push(rehearsalAdvice(s, rehearsal));
+    } else if (plan.set === 'gate' && plan.pack === '0') {
       report.push(
-        stepStart(s, objections) === null
-          ? 'The objection block was not reached: the same pack can be recorded again (spec 9.4).'
-          : 'The objection block was heard: record the next unused pack, B, then C (spec 9.4).',
+        end.creditsUsedUp
+          ? 'The SDK ended the probe with kCreditExhausted, so its credits are used up: neither the probe nor a pack can be recorded until the SDK has credits again (PREREG.md section 11).'
+          : 'Fix the cause and repeat the probe (npm run gate -- --pack 0) until it gives GOOD RECORDING (spec 9.4).',
       );
+    } else if (plan.set === 'gate' && plan.pack !== '0') {
+      report.push(nextRecordingAdvice({ technical: technical === true, pack: plan.pack, objectionsReached: end.objectionsReached, detectorComputed: computed, creditsUsedUp: end.creditsUsedUp }));
     }
   }
   return { quickcheck, conditions, line, report };
@@ -244,9 +290,12 @@ export function dryRunLine(plan: QuickcheckPlan): string {
 // ---- running it ------------------------------------------------------------------------------------
 
 export interface QuickcheckDeps {
-  /** stdout: the one verdict line (and the doctor report, which ends with its own one line). */
+  /**
+   * stdout: the one verdict line, last (and the doctor report, which ends with its own one line);
+   * before it, for a gate run no SDK measured, the line that says it is a rehearsal.
+   */
   out?: (line: string) => void;
-  /** stderr: the per-condition report and the ledger note, so stdout keeps exactly one line (spec 7.12). */
+  /** stderr: the per-condition report and the ledger note, so stdout keeps the verdict for its last line (spec 7.12). */
   log?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
@@ -328,6 +377,10 @@ export async function runQuickcheck(session: LoadedSession, deps: QuickcheckDeps
   const text = toJsonText(evaluation.quickcheck, null);
   for (const l of evaluation.report) log(l);
   log(writeQuickcheckFile(session, text, deps));
+  // PREREG.md section 11: a gate run no SDK measured keeps its verdict, and one line before it
+  // says that it is a rehearsal, which clocks, label and analyze:gate refuse, and what to do next.
+  const rehearsal = plan.set === 'gate' ? rehearsalLine(session, plan.pack) : null;
+  if (rehearsal !== null) out(rehearsal);
   out(evaluation.line);
   return { code: evaluation.quickcheck.result === 'GOOD RECORDING' ? EXIT_GOOD : EXIT_RERECORD, lines, evaluation };
 }

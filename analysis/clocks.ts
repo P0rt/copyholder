@@ -2,7 +2,8 @@
 // before the labelling. Writes clock_report.json (the `onset` block stays null until `label`),
 // merges the clock blocks into calib.json (L_rt, camera clock; in the gate also the trace sign,
 // A_ref and the sniff lag), and appends the ledger step `clocks` with the hashes of both files.
-// Prints measured numbers only, in plain words.
+// Prints measured numbers only, in plain words. A gate run no SDK measured (the mock tap, tap's
+// stand-in SDK) is a rehearsal and is refused before anything is written (PREREG.md section 11).
 //
 //   npx tsx analysis/clocks.ts <id>    exit 0 clock check passed, 2 failed (files written), 1 refused or crashed
 
@@ -14,6 +15,7 @@ import { LedgerRefusal, appendLedgerNote, readJsonFile, readLedger, refusalFor, 
 import { gitShortCommit } from './lib/git.ts';
 import { appendLedgerStep, utcSeconds } from './lib/ledger.ts';
 import { REPO_ROOT, shownPath } from './lib/paths.ts';
+import { rehearsalRefusal } from './lib/rehearsal.ts';
 import { SESSION_FILES, SessionLoadError, loadSession, type LoadedSession } from './lib/session.ts';
 
 export const EXIT_OK = 0;
@@ -57,6 +59,10 @@ export function runClocks(session: LoadedSession, deps: ClocksDeps = {}): Clocks
 
   const plan = clocksPlan(session.manifest);
   if ('refuse' in plan) return refuse(plan.refuse);
+  // A gate run no SDK measured is a rehearsal: no clock report or calib.json blocks are written for
+  // it, so nothing in its folder looks like a recording of the pack (PREREG.md section 11).
+  const rehearsal = plan.gate === null ? null : rehearsalRefusal(session, plan.gate.pack);
+  if (rehearsal !== null) return refuse(rehearsal);
   let ledger;
   try {
     ledger = readLedger(session.dir, session.kind);

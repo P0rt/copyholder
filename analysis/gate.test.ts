@@ -169,6 +169,24 @@ function prefixLength(s: GateSynth): number {
   return detectorInBefore(s.inputs, arrivalsBefore(s.stamps, s.nCut), s.nCut).length;
 }
 
+/** Changes fields of manifest.json, as host would have written them (null removes nothing: it is a value). */
+function rewriteManifest(dir: string, fields: Record<string, unknown>): void {
+  const file = path.join(dir, 'manifest.json');
+  const m = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+  fs.writeFileSync(file, `${JSON.stringify({ ...m, ...fields }, null, 2)}\n`);
+}
+
+/**
+ * The analyze:gate refusal of a gate run no SDK measured (PREREG.md section 11) that reached its
+ * objection block, so it played the planted errors of the pack (section 7.1).
+ */
+function rehearsalRefusal(pack: string, says: string): string {
+  return `analyze:gate refused: this recording is a rehearsal, not a recording of pack ${pack}: manifest.json says ${says}, so no SDK measured the chest (PREREG.md section 11). It played the planted errors of pack ${pack} (its objection block, from 4:15, began), and the participant does not hear a pack before it is recorded (PREREG.md section 7.1): keep this folder as the record of that, and do not record pack ${pack} with a participant who heard this run.`;
+}
+
+/** Escapes a text for an exact RegExp. */
+const exactly = (text: string): RegExp => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`);
+
 /** Replaces line `i` (0-based) of a session file. */
 function breakLine(dir: string, file: string, i: number, text = '{"k":"batch","seq":'): void {
   const lines = fs.readFileSync(path.join(dir, file), 'utf8').split('\n');
@@ -603,6 +621,62 @@ describe('analyze:gate refusals (spec 8.5, 9.5)', () => {
     expect(e.err.join('\n')).toMatch(/changed since stage A/);
   });
 
+  // Stage B checks the record and its pack before the ledger, as stage A does (spec 9.4).
+  it('refuses stage B on the probe with the pack 0 message of stage A, not a ledger-order one', async () => {
+    const e = env('probe');
+    const dir = writeGateSession(e.sessions, buildGateSynth({ replies: PASS_PLAN }), 'gate-0');
+    rewriteManifest(dir, { pack: '0', scenario: 'gate-0' });
+    for (const stage of ['A', 'B', 'b']) {
+      await refused(e, dir, ['--stage', stage, 'gate-0'], /^analyze:gate refused: analyze:gate needs a full pack \(A, B or C\); this recording has pack 0 \(the probe is not scored, spec 9\.4\)$/);
+      expect(e.err.join('\n')).not.toMatch(/out of order|stage_a/);
+    }
+    await refused(e, dir, ['--stage', 'B', 'gate-0', '--exploratory'], /this recording has pack 0 \(the probe is not scored, spec 9\.4\)$/);
+    expect(fs.readFileSync(e.paramsFile, 'utf8')).toBe(PREREG);
+  });
+
+  // PREREG.md section 11: the mock tap made up the chest trace, tap's stand-in SDK ran, or no SDK
+  // ran: such a run is a rehearsal, which neither stage scores, so no verdict.json is written.
+  it('refuses a gate run no SDK measured, in stage A and stage B, with nothing written', async () => {
+    const cases: Array<{ name: string; pack: 'A' | 'B' | 'C'; fields: Record<string, unknown>; says: string }> = [
+      { name: 'mock-a', pack: 'A', fields: { tap: 'mock', sdk: null }, says: 'tap: "mock" (the mock tap made up the chest trace)' },
+      { name: 'mock-c', pack: 'C', fields: { tap: 'mock', sdk: null, pack: 'C', scenario: 'gate-C' }, says: 'tap: "mock" (the mock tap made up the chest trace)' },
+      { name: 'dry', pack: 'A', fields: { tap: 'real', dry: true }, says: "dry: true (tap ran its stand-in SDK)" },
+      { name: 'no-sdk', pack: 'B', fields: { sdk: null, pack: 'B', scenario: 'gate-B' }, says: 'sdk: null (no SDK ran)' },
+    ];
+    for (const c of cases) {
+      const e = env(`rehearsal-${c.name}`);
+      const dir = writeGateSession(e.sessions, buildGateSynth({ replies: PASS_PLAN }));
+      rewriteManifest(dir, c.fields);
+      const exact = exactly(rehearsalRefusal(c.pack, c.says));
+      await refused(e, dir, ['--stage', 'A', 'gate-a'], exact);
+      await refused(e, dir, ['--stage', 'B', 'gate-a'], exact);
+      await refused(e, dir, ['--stage', 'A', 'gate-a', '--exploratory'], exact);
+      expect(fs.existsSync(path.join(dir, 'verdict.json'))).toBe(false);
+      expect(fs.readFileSync(e.paramsFile, 'utf8')).toBe(PREREG);
+    }
+    // A rehearsal that stopped before its objection block played no planted error: it is deleted,
+    // and the pack recorded with the real tap. Neither stage names a rule for a failed recording.
+    const early = env('rehearsal-early');
+    const dir0 = writeGateSession(early.sessions, buildGateSynth({ replies: PASS_PLAN }));
+    rewriteManifest(dir0, { tap: 'mock', sdk: null, pack: 'B', scenario: 'gate-B' });
+    const stamps = fs.readFileSync(path.join(dir0, 'stamps.jsonl'), 'utf8').split('\n');
+    const mark = stamps.filter((l) => l.includes('"objections"'));
+    expect(mark).toHaveLength(1);
+    fs.writeFileSync(path.join(dir0, 'stamps.jsonl'), stamps.filter((l) => !mark.includes(l)).join('\n'));
+    const purge = exactly(
+      'analyze:gate refused: this recording is a rehearsal, not a recording of pack B: manifest.json says tap: "mock" (the mock tap made up the chest trace), so no SDK measured the chest (PREREG.md section 11). It stopped before the objection block (4:15), so it played no planted error of pack B: delete it with npm run purge -- gate-a --yes, and record pack B with the real tap (npm run gate -- --pack B, without --tap mock).',
+    );
+    await refused(early, dir0, ['--stage', 'A', 'gate-a'], purge);
+    await refused(early, dir0, ['--stage', 'B', 'gate-a'], purge);
+    expect(early.err.join('\n')).not.toMatch(/lost|recorded again|pooled numbers/);
+    // The same recording with the real tap and its SDK is scored.
+    const e = env('rehearsal-real');
+    const dir = writeGateSession(e.sessions, buildGateSynth({ replies: PASS_PLAN }));
+    rewriteManifest(dir, { tap: 'real' });
+    await stages(e);
+    expect(fs.existsSync(path.join(dir, 'verdict.json'))).toBe(true);
+  });
+
   it('parses the command line', () => {
     expect(parseGateArgs(['--stage', 'a', 'gate-a'])).toEqual({ stage: 'A', id: 'gate-a', exploratory: false, paramsFile: null, skipOther: false });
     expect(parseGateArgs(['--stage', 'B', 'gate-b', '--exploratory', '--params', 'x.json'])).toMatchObject({ stage: 'B', exploratory: true, paramsFile: 'x.json' });
@@ -644,6 +718,30 @@ describe('a recording that does not count is not scored (spec 9.4, 9.6)', () => 
     };
     const dir = writeGateSession(e.sessions, { ...synth, quickcheck: content });
     await refused(e, dir, ['--stage', 'A', 'gate-a'], /RE-RECORD NOW: voice after 11 cues, fewer than 12\nquickcheck marks the failure as not technical .*record the next unused pack/);
+  });
+
+  // PREREG.md section 11: packs B and C are not recorded again after 4:15, and a recording the SDK
+  // ended with kCreditExhausted is lost, reported with its reason and not replaced.
+  it('gives the advice of section 11 on packs B and C, and loses a recording the SDK ended for lack of credits', async () => {
+    const lost = async (name: string, pack: 'B' | 'C', events: object[]): Promise<string> => {
+      const e = env(name);
+      const id = `gate-${pack.toLowerCase()}`;
+      const dir = writeGateSession(e.sessions, { ...synth, quickcheck: reRecordQuickcheck() }, id);
+      rewriteManifest(dir, { pack, scenario: `gate-${pack}` });
+      fs.writeFileSync(path.join(dir, 'events.jsonl'), toJsonlText(events, 'events.jsonl'));
+      await refused(e, dir, ['--stage', 'A', id], /^analyze:gate refused: this recording does not count/);
+      return e.err.join('\n');
+    };
+    const head = 'analyze:gate refused: this recording does not count, so analyze:gate does not score it (spec 9.4, 9.6):\n  quickcheck.json says RE-RECORD NOW: microphone processing not off\n';
+    expect(await lost('lost-b', 'B', [])).toBe(
+      `${head}The failure is technical, but the objection block (from 4:15) was heard, so pack B is lost, reported with its reason and not replaced (PREREG.md section 11). Go on in the order of section 11, with one demo take, then pack C; npm run confirm -- <idB> <idC> takes this recording as <idB> and reports it as lost.`,
+    );
+    const credits = { n: 4_000_000, e: 'sdk_error', by: 'host', code: 4, name: 'kCreditExhausted', message: 'The credits are used up.' };
+    expect(await lost('credits-c', 'C', [credits])).toBe(
+      `${head}The SDK ended the recording with kCreditExhausted, so its credits are used up: pack C is lost, reported with its reason and not replaced (PREREG.md section 11). The confirmatory numbers are those of pack B alone, flagged: npm run confirm -- <idB> <idC> takes this recording as <idC> and reports it as lost.`,
+    );
+    // The one restart of code 8 is not an end of the recording.
+    expect(await lost('restart-c', 'C', [{ ...credits, code: 8, name: 'kInvalidState', action: 'reset_restart' }])).toMatch(/\nThe failure is technical, but the objection block \(from 4:15\) was heard, so pack C is lost/);
   });
 
   it('refuses stage A when clock_report.json finds the audio or the trace not valid', async () => {

@@ -182,6 +182,60 @@ describe('clocks and the ledger order (spec 8.5)', () => {
     expect(run.refused).toMatch(/out of order/);
   });
 
+  // PREREG.md section 11: a gate run no SDK measured is a rehearsal; clocks writes nothing for it,
+  // so no clock report, calib.json block or ledger step makes the folder look like data.
+  it('refuses a gate run with the mock tap or without the SDK, writes nothing, and says to keep or delete the folder', () => {
+    const cases: Array<{ id: string; fields: Record<string, unknown>; says: string }> = [
+      { id: 'gate-mock', fields: { tap: 'mock', sdk: null }, says: 'tap: "mock" (the mock tap made up the chest trace)' },
+      { id: 'gate-dry', fields: { tap: 'real', dry: true }, says: "dry: true (tap ran its stand-in SDK)" },
+      { id: 'gate-nosdk', fields: { sdk: null }, says: 'sdk: null (no SDK ran)' },
+    ];
+    // The synthetic recording reached its objection block, so the run played the planted errors of
+    // pack A (PREREG.md section 7.1); one that stopped before it, or the probe, is deleted instead.
+    const keep =
+      'It played the planted errors of pack A (its objection block, from 4:15, began), and the participant does not hear a pack before it is recorded (PREREG.md section 7.1): keep this folder as the record of that, and do not record pack A with a participant who heard this run.';
+    const objections = gateSteps('A').objections;
+    const noObjections = (data: SessionData): SessionData => ({ ...data, stamps: data.stamps.filter((s) => !(s.k === 'mark' && s.what === 'step' && s.name === objections)) });
+    const more: Array<{ id: string; fields: Record<string, unknown>; says: string; pack?: string; edit?: (data: SessionData) => SessionData; next: string }> = [
+      ...cases.map((c) => ({ ...c, next: keep })),
+      {
+        id: 'gate-mock-early',
+        fields: { tap: 'mock', sdk: null },
+        says: 'tap: "mock" (the mock tap made up the chest trace)',
+        edit: noObjections,
+        next: 'It stopped before the objection block (4:15), so it played no planted error of pack A: delete it with npm run purge -- gate-mock-early --yes, and record pack A with the real tap (npm run gate -- --pack A, without --tap mock).',
+      },
+      {
+        id: 'gate-mock-probe',
+        fields: { tap: 'mock', sdk: null, pack: '0', scenario: 'gate-0' },
+        says: 'tap: "mock" (the mock tap made up the chest trace)',
+        pack: '0',
+        next: 'Delete it with npm run purge -- gate-mock-probe --yes, and record the probe with the real tap (npm run gate -- --pack 0, without --tap mock).',
+      },
+    ];
+    for (const c of more) {
+      const { dir } = makeGateFolder(ROOT, { id: c.id, through: 'quickcheck', ...(c.edit ? { edit: c.edit } : {}) });
+      const file = path.join(dir, 'manifest.json');
+      fs.writeFileSync(file, `${JSON.stringify({ ...(JSON.parse(fs.readFileSync(file, 'utf8')) as object), ...c.fields }, null, 2)}\n`);
+      const before = fs.readdirSync(dir).sort();
+      const ledger = fs.readFileSync(path.join(dir, 'ledger.jsonl'), 'utf8');
+      const lines: string[] = [];
+      const run = runClocks(loadSession(dir), { ...quiet, out: (l) => lines.push(l) });
+      const why = `this recording is a rehearsal, not a recording of pack ${c.pack ?? 'A'}: manifest.json says ${c.says}, so no SDK measured the chest (PREREG.md section 11). ${c.next}`;
+      expect(run.code).toBe(EXIT_REFUSED);
+      expect(run.refused).toBe(why);
+      expect(lines).toEqual([`CLOCKS DID NOT RUN for ${c.id}: ${why}`]);
+      expect(fs.readdirSync(dir).sort()).toEqual(before);
+      expect(fs.existsSync(path.join(dir, CLOCK_REPORT_FILE))).toBe(false);
+      expect(fs.readFileSync(path.join(dir, 'ledger.jsonl'), 'utf8')).toBe(ledger);
+    }
+    // With the real tap and its SDK the same recording is measured.
+    const { dir } = makeGateFolder(ROOT, { id: 'gate-real', through: 'quickcheck' });
+    const file = path.join(dir, 'manifest.json');
+    fs.writeFileSync(file, `${JSON.stringify({ ...(JSON.parse(fs.readFileSync(file, 'utf8')) as object), tap: 'real' }, null, 2)}\n`);
+    expect(runClocks(loadSession(dir), quiet).refused).toBeUndefined();
+  });
+
   it('refuses record kinds without a ledger or without the clocks step', () => {
     const { session } = makeSyntheticSession({ narrationS: 16, replies: 2, seed: 3 });
     const doctor = writeSessionFolder(ROOT, session, { id: 'doctor-9', kind: 'doctor', scenario: 'doctor' });
